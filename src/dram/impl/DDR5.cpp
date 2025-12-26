@@ -479,6 +479,9 @@ class DDR5 : public IDRAM, public Implementation {
         { 60,  60,  60 }, // tRRFsb
       };
       m_BRC = param_group("RFM").param<int>("BRC").default_val(2);
+      if (m_BRC < 1) {
+        throw ConfigurationError("BRC must be a positive integer in {}.", get_name());
+      }
       m_timing_vals("nDRFMab") = 2 * m_BRC * JEDEC_rounding_DDR5(tRRFsb_TABLE[0][density_id], tCK_ps);
       m_timing_vals("nDRFMsb") = 2 * m_BRC * JEDEC_rounding_DDR5(tRRFsb_TABLE[1][density_id], tCK_ps);
 
