@@ -6,6 +6,7 @@ add_subdirectory(memory_system)
 add_subdirectory(addr_mapper)
 add_subdirectory(dram)
 add_subdirectory(dram_controller)
+add_subdirectory(dpi_wrapper)
 
 target_sources(
   ramulator-exe
