@@ -4,12 +4,16 @@
 #include "memory_system/memory_system.h"
 #include <queue>
 #include <memory>
+#include <unordered_map>
+#include <tuple>
 
 using namespace Ramulator;
+using RequestInfo = std::tuple<long long, int>;
 
 struct RamulatorWrapper {
     std::unique_ptr<IFrontEnd> frontend;
     std::unique_ptr<IMemorySystem> memory_system;
+    std::unordered_map<Addr_t, RequestInfo> req_times;
     std::queue<Addr_t> completed_requests;
     int mem_tick_ratio;
     int frontend_tick_ratio;
@@ -63,7 +67,14 @@ int ramulator_send_request(
         req_type, addr, source_id, callback
     );
     
-    return accepted ? 1 : 0;
+    if (accepted) {
+        wrapper->req_times[addr] = std::make_tuple(wrapper->cycle_count, req_type);
+        printf("Request type %d at address %x is accepted\n", req_type, addr);
+        return 1;
+    } else {
+        return 0;
+    }
+    // return accepted ? 1 : 0;
 }
 
 void ramulator_tick(ramulator_handle_t handle) {
@@ -92,6 +103,9 @@ long long ramulator_check_response(ramulator_handle_t handle) {
     
     Addr_t addr = wrapper->completed_requests.front();
     wrapper->completed_requests.pop();
+    auto [timestamp, req_type] = wrapper->req_times[addr];
+    printf("Tick difference for address %x, req_type %d: %ld\n", addr, req_type, wrapper->cycle_count - timestamp);
+
     return addr;
 }
 
@@ -103,4 +117,3 @@ void ramulator_finalize(ramulator_handle_t handle) {
 }
 
 } // extern "C"
-
