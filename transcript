@@ -12,35 +12,257 @@
 # //  is prohibited from disclosure under the Trade Secrets Act,
 # //  18 U.S.C. Section 1905.
 # //
-# do sim/run_vsim.do
-# QuestaSim-64 vmap 2021.4 Lib Mapping Utility 2021.10 Oct 13 2021
-# vmap work work 
-# Copying /package/eda/mg/questa2021.4/questasim/linux_x86_64/../modelsim.ini to modelsim.ini
-# Modifying modelsim.ini
-# QuestaSim-64 vlog 2021.4 Compiler 2021.10 Oct 13 2021
-# Start time: 20:49:54 on Feb 26,2026
-# vlog -reportprogress 300 -sv -work work src/dpi_wrapper/ramulator_sv_wrapper.sv src/dpi_wrapper/tb_ramulator_dpi.sv 
-# -- Compiling module ramulator_sv_wrapper
-# -- Compiling module tb_ramulator_dpi
-# 
-# Top level modules:
-# 	tb_ramulator_dpi
-# End time: 20:49:55 on Feb 26,2026, Elapsed time: 0:00:01
-# Errors: 0, Warnings: 0
-# vsim -sv_lib ./libramulator_dpi -sv_lib ./libramulator -t 1ps work.tb_ramulator_dpi 
-# Start time: 20:49:55 on Feb 26,2026
+# vsim work.test_ramulator -sv_lib ./libramulator_dpi -do "run -all" 
+# Start time: 17:26:51 on Feb 28,2026
 # ** Note: (vsim-3812) Design is being optimized...
 # Loading sv_std.std
-# Loading work.tb_ramulator_dpi(fast)
+# Loading work.test_ramulator(fast)
 # Loading ././libramulator_dpi.so
-# .main_pane.wave.interior.cs.body.pw.wf
-# .main_pane.structure.interior.cs.body.struct
-# .main_pane.objects.interior.cs.body.tree
-# sim:/tb_ramulator_dpi
-# ** UI-Msg (Warning): (vish-4014) No objects found matching '/*'.
-# Error in macro ./sim/run_vsim.do line 42
-# ** UI-Msg (Warning): (vish-4014) No objects found matching '/*'.
-#     while executing
-# "log -r /*"
-# End time: 20:50:57 on Feb 26,2026, Elapsed time: 0:01:02
-# Errors: 0, Warnings: 0
+# run -all
+# === Ramulator SV wrapper smoke test ===
+# Config: configs/ddr4_config.yaml
+# 
+# [1] ramulator_init ... [ramulator_sv_wrapper] Init OK (config=configs/ddr4_config.yaml)
+# OK
+# [2] Issuing 128 requests over up to 100000 cycles ...
+# Request type 1 at address 0 is accepted
+# Request type 0 at address 40 is accepted
+# Request type 0 at address 80 is accepted
+# Request type 0 at address c0 is accepted
+# Request type 1 at address 100 is accepted
+# Request type 0 at address 140 is accepted
+# Request type 0 at address 180 is accepted
+# Request type 0 at address 1c0 is accepted
+# Request type 1 at address 200 is accepted
+# Request type 0 at address 240 is accepted
+# Request type 0 at address 280 is accepted
+# Request type 0 at address 2c0 is accepted
+# Request type 1 at address 300 is accepted
+# Request type 0 at address 340 is accepted
+# Request type 0 at address 380 is accepted
+# Request type 0 at address 3c0 is accepted
+# Request type 1 at address 400 is accepted
+# Request type 0 at address 440 is accepted
+# Request type 0 at address 480 is accepted
+# Request type 0 at address 4c0 is accepted
+# Request type 1 at address 500 is accepted
+# Request type 0 at address 540 is accepted
+# Request type 0 at address 580 is accepted
+# Request type 0 at address 5c0 is accepted
+# Request type 1 at address 600 is accepted
+# Request type 0 at address 640 is accepted
+# Request type 0 at address 680 is accepted
+# Request type 0 at address 6c0 is accepted
+# Request type 1 at address 700 is accepted
+# Request type 0 at address 740 is accepted
+# Request type 0 at address 780 is accepted
+# Request type 0 at address 7c0 is accepted
+# Request type 1 at address 800 is accepted
+# Request type 0 at address 840 is accepted
+# Request type 0 at address 880 is accepted
+# Request type 0 at address 8c0 is accepted
+# Request type 1 at address 900 is accepted
+# Request type 0 at address 940 is accepted
+# Request type 0 at address 980 is accepted
+# Request type 0 at address 9c0 is accepted
+# Request type 1 at address a00 is accepted
+# Request type 0 at address a40 is accepted
+# Request type 0 at address a80 is accepted
+# Request type 0 at address ac0 is accepted
+# Request type 1 at address b00 is accepted
+# Request type 0 at address b40 is accepted
+# Request type 0 at address b80 is accepted
+# Request type 0 at address bc0 is accepted
+# Request type 1 at address c00 is accepted
+# Tick difference for address 40, req_type 0: 61
+# Tick difference for address 80, req_type 0: 66
+# Tick difference for address c0, req_type 0: 71
+# Request type 0 at address c40 is accepted
+# Request type 0 at address c80 is accepted
+# Request type 0 at address cc0 is accepted
+# Request type 1 at address d00 is accepted
+# Request type 0 at address d40 is accepted
+# Tick difference for address 140, req_type 0: 110
+# Tick difference for address 180, req_type 0: 115
+# Tick difference for address 1c0, req_type 0: 120
+# Tick difference for address 240, req_type 0: 124
+# Request type 0 at address d80 is accepted
+# Request type 0 at address dc0 is accepted
+# Request type 1 at address e00 is accepted
+# Request type 0 at address e40 is accepted
+# Request type 0 at address e80 is accepted
+# Tick difference for address 280, req_type 0: 164
+# Tick difference for address 2c0, req_type 0: 169
+# Tick difference for address 340, req_type 0: 173
+# Tick difference for address 380, req_type 0: 178
+# Request type 0 at address ec0 is accepted
+# Request type 1 at address f00 is accepted
+# Request type 0 at address f40 is accepted
+# Request type 0 at address f80 is accepted
+# Request type 0 at address fc0 is accepted
+# Request type 1 at address 1000 is accepted
+# Tick difference for address 3c0, req_type 0: 218
+# Tick difference for address 440, req_type 0: 222
+# Tick difference for address 480, req_type 0: 227
+# Tick difference for address 4c0, req_type 0: 232
+# Request type 0 at address 1040 is accepted
+# Request type 0 at address 1080 is accepted
+# Request type 0 at address 10c0 is accepted
+# Request type 1 at address 1100 is accepted
+# Request type 0 at address 1140 is accepted
+# Tick difference for address 540, req_type 0: 271
+# Tick difference for address 580, req_type 0: 276
+# Tick difference for address 5c0, req_type 0: 281
+# Tick difference for address 640, req_type 0: 285
+# Request type 0 at address 1180 is accepted
+# Request type 0 at address 11c0 is accepted
+# Request type 1 at address 1200 is accepted
+# Request type 0 at address 1240 is accepted
+# Request type 0 at address 1280 is accepted
+# Tick difference for address 680, req_type 0: 325
+# Tick difference for address 6c0, req_type 0: 330
+# Tick difference for address 740, req_type 0: 334
+# Tick difference for address 780, req_type 0: 339
+# Request type 0 at address 12c0 is accepted
+# Request type 1 at address 1300 is accepted
+# Request type 0 at address 1340 is accepted
+# Request type 0 at address 1380 is accepted
+# Request type 0 at address 13c0 is accepted
+# Request type 1 at address 1400 is accepted
+# Tick difference for address 7c0, req_type 0: 379
+# Tick difference for address 840, req_type 0: 383
+# Tick difference for address 880, req_type 0: 388
+# Tick difference for address 8c0, req_type 0: 393
+# Request type 0 at address 1440 is accepted
+# Request type 0 at address 1480 is accepted
+# Request type 0 at address 14c0 is accepted
+# Request type 1 at address 1500 is accepted
+# Request type 0 at address 1540 is accepted
+# Tick difference for address 940, req_type 0: 432
+# Tick difference for address 980, req_type 0: 437
+# Tick difference for address 9c0, req_type 0: 442
+# Tick difference for address a40, req_type 0: 446
+# Request type 0 at address 1580 is accepted
+# Request type 0 at address 15c0 is accepted
+# Request type 1 at address 1600 is accepted
+# Request type 0 at address 1640 is accepted
+# Request type 0 at address 1680 is accepted
+# Tick difference for address a80, req_type 0: 486
+# Tick difference for address ac0, req_type 0: 491
+# Tick difference for address b40, req_type 0: 495
+# Tick difference for address b80, req_type 0: 498
+# Request type 0 at address 16c0 is accepted
+# Request type 1 at address 1700 is accepted
+# Request type 0 at address 1740 is accepted
+# Request type 0 at address 1780 is accepted
+# Request type 0 at address 17c0 is accepted
+# Request type 1 at address 1800 is accepted
+# Tick difference for address bc0, req_type 0: 533
+# Tick difference for address c40, req_type 0: 514
+# Tick difference for address c80, req_type 0: 498
+# Tick difference for address cc0, req_type 0: 498
+# Request type 0 at address 1840 is accepted
+# Request type 0 at address 1880 is accepted
+# Request type 0 at address 18c0 is accepted
+# Request type 1 at address 1900 is accepted
+# Request type 0 at address 1940 is accepted
+# Tick difference for address d40, req_type 0: 533
+# Tick difference for address d80, req_type 0: 514
+# Tick difference for address dc0, req_type 0: 498
+# Tick difference for address e40, req_type 0: 498
+# Request type 0 at address 1980 is accepted
+# Request type 0 at address 19c0 is accepted
+# Request type 1 at address 1a00 is accepted
+# Tick difference for address e80, req_type 0: 533
+# Tick difference for address ec0, req_type 0: 514
+# Request type 0 at address 1a40 is accepted
+# Request type 0 at address 1a80 is accepted
+# Tick difference for address f40, req_type 0: 941
+# Tick difference for address f80, req_type 0: 941
+# Request type 0 at address 1ac0 is accepted
+# Request type 1 at address 1b00 is accepted
+# Request type 0 at address 1b40 is accepted
+# Request type 0 at address 1b80 is accepted
+# Request type 0 at address 1bc0 is accepted
+# Request type 1 at address 1c00 is accepted
+# Tick difference for address fc0, req_type 0: 976
+# Tick difference for address 1040, req_type 0: 957
+# Tick difference for address 1080, req_type 0: 941
+# Tick difference for address 10c0, req_type 0: 941
+# Request type 0 at address 1c40 is accepted
+# Request type 0 at address 1c80 is accepted
+# Request type 0 at address 1cc0 is accepted
+# Request type 1 at address 1d00 is accepted
+# Request type 0 at address 1d40 is accepted
+# Tick difference for address 1140, req_type 0: 976
+# Tick difference for address 1180, req_type 0: 957
+# Tick difference for address 11c0, req_type 0: 941
+# Tick difference for address 1240, req_type 0: 941
+# Request type 0 at address 1d80 is accepted
+# Request type 0 at address 1dc0 is accepted
+# Request type 1 at address 1e00 is accepted
+# Request type 0 at address 1e40 is accepted
+# Request type 0 at address 1e80 is accepted
+# Tick difference for address 1280, req_type 0: 976
+# Tick difference for address 12c0, req_type 0: 957
+# Tick difference for address 1340, req_type 0: 941
+# Tick difference for address 1380, req_type 0: 941
+# Request type 0 at address 1ec0 is accepted
+# Request type 1 at address 1f00 is accepted
+# Request type 0 at address 1f40 is accepted
+# Request type 0 at address 1f80 is accepted
+# Request type 0 at address 1fc0 is accepted
+# Tick difference for address 13c0, req_type 0: 976
+# Tick difference for address 1440, req_type 0: 957
+# Tick difference for address 1480, req_type 0: 941
+# Tick difference for address 14c0, req_type 0: 941
+# Tick difference for address 1540, req_type 0: 976
+# Tick difference for address 1580, req_type 0: 957
+# Tick difference for address 15c0, req_type 0: 941
+# Tick difference for address 1640, req_type 0: 941
+# Tick difference for address 1680, req_type 0: 976
+# Tick difference for address 16c0, req_type 0: 957
+# Tick difference for address 1740, req_type 0: 941
+# Tick difference for address 1780, req_type 0: 941
+# Tick difference for address 17c0, req_type 0: 976
+# Tick difference for address 1840, req_type 0: 957
+# Tick difference for address 1880, req_type 0: 941
+# Tick difference for address 18c0, req_type 0: 941
+# Tick difference for address 1940, req_type 0: 976
+# Tick difference for address 1980, req_type 0: 957
+# Tick difference for address 19c0, req_type 0: 941
+# Tick difference for address 1a40, req_type 0: 498
+# Tick difference for address 1a80, req_type 0: 533
+# Tick difference for address 1ac0, req_type 0: 514
+# Tick difference for address 1b40, req_type 0: 498
+# Tick difference for address 1b80, req_type 0: 498
+# Tick difference for address 1bc0, req_type 0: 533
+# Tick difference for address 1c40, req_type 0: 514
+# Tick difference for address 1c80, req_type 0: 498
+# Tick difference for address 1cc0, req_type 0: 498
+# Tick difference for address 1d40, req_type 0: 533
+# Tick difference for address 1d80, req_type 0: 514
+# Tick difference for address 1dc0, req_type 0: 498
+# Tick difference for address 1e40, req_type 0: 498
+# Tick difference for address 1e80, req_type 0: 533
+# Tick difference for address 1ec0, req_type 0: 514
+# Tick difference for address 1f40, req_type 0: 498
+# Tick difference for address 1f80, req_type 0: 498
+# Tick difference for address 1fc0, req_type 0: 533
+#     All reads completed (534 cycles after last issue)
+# 
+# --- Results ---
+#   Requests issued      : 128 / 128
+#   Reads completed      : 96 / 96
+#   Functional checks OK : 96 / 96
+#   Send accepted        : 128
+#   Send rejected        : 1255
+# 
+# [3] ramulator_send_request ... OK (128 accepted)
+# [4] ramulator_check_response ... OK (96 completions)
+# [5] Functional model ... OK (all 96 reads returned correct data)
+# [6] ramulator_finalize ... OK (called in final block)
+# 
+# === Smoke test PASSED ===
+# 1
+# Break at src/dpi_wrapper/test_ramulator.sv line 269
