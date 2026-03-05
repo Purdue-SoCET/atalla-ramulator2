@@ -36,6 +36,10 @@ long long ramulator_check_response(ramulator_handle_t handle, uint64_t* data_out
 // Cleanup
 void ramulator_finalize(ramulator_handle_t handle);
 
+// Exit immediately via _Exit(), bypassing simulator teardown that hits
+// Ramulator2's heap corruption.  Use instead of $finish in SV.
+void ramulator_exit(int code);
+
 #ifdef __cplusplus
 }
 #endif
