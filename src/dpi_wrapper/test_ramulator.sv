@@ -1,274 +1,249 @@
-// test_ramulator.sv — SystemVerilog smoke test for ramulator_sv_wrapper
+// test_ramulator.sv — AXI master-side smoketest for ramulator_sv_wrapper
 //
-// Drives the AXI subordinate-side channels of axi_bus_if:
-//   AR channel  → issue reads
-//   R  channel  ← receive read data (r_i_ready tied 1)
-//   AW+W channel→ issue writes (both presented simultaneously)
-//   B  channel  ← receive write ack (b_i_ready tied 1)
+// Drives the subordinate-facing channels of axi_bus_if using proper
+// AXI4 valid/ready handshaking on all five channels:
 //
-// Test flow mirrors test_dpi.c:
-//   [1] Init — wait for init_done
-//   [2] Issue 128 requests (every 4th a write), one at a time
-//   [3] Accept check  — all requests accepted
-//   [4] Completion    — all reads completed
-//   [5] Functional    — read data matches shadow memory / address default
-//   [6] Finalize      — ramulator_exit (wrapper final block calls ramulator_finalize)
+//   AR  : drive ar_o_valid / ar_o,   await ar_o_ready    (wrapper output)
+//   R   : drive r_i_ready,           await r_i_valid / r_i
+//   AW  : drive aw_o_valid / aw_o,   await aw_o_ready    (simultaneous with W)
+//   W   : drive w_o_valid  / w_o,    await w_o_ready
+//   B   : drive b_i_ready,           await b_i_valid / b_i
 //
-// Compile + run (from project root):
-//   vlib work
-//   vlog -sv -mfcu +acc +incdir+src/axi \
-//        src/axi/axi_bus_pkg.sv src/axi/axi_bus_if.sv \
-//        src/dpi_wrapper/ramulator_sv_wrapper.sv \
-//        src/dpi_wrapper/test_ramulator.sv
-//   vsim -c -sv_lib ./libramulator_dpi work.test_ramulator \
-//        -do "run -all; quit -f"
+// Test plan:
+//   [1] Reset + ramulator_init
+//   [2] Write phase      — NUM_WR writes, verify B ack per write
+//   [3] Read-after-write — read back each written address, check vs shadow mem
+//   [4] Raw reads        — read unwritten addresses, check wrapper returns addr
+//   [5] Pass/fail summary
 
 `timescale 1ns / 1ps
 
 module test_ramulator;
-
     import axi_bus_pkg::*;
 
-    // Use ramulator_exit() instead of $finish to bypass QuestaSim's
-    // post-simulation cleanup, which hits heap corruption left by Ramulator2.
+    // Use ramulator_exit() to bypass QuestaSim post-sim cleanup which
+    // hits heap corruption left by Ramulator2 (see ramulator_dpi.cpp).
     import "DPI-C" function void ramulator_exit(input int code);
 
     // ----------------------------------------------------------------
     // Parameters
     // ----------------------------------------------------------------
-    localparam string  CFG         = "configs/ddr4_config.yaml";
-    localparam int     NUM_REQS    = 128;
-    localparam int     MAX_CYCLES  = 500000;
-    localparam longint ADDR_STRIDE = 64;
-    localparam longint WR_PATTERN  = 64'hDEADBEEFCAFEBABE;
+    localparam string  CFG        = "configs/ddr4_config.yaml";
+    localparam int     NUM_WR     = 16;
+    localparam int     NUM_RD_RAW = 8;      // reads to addresses never written
+    localparam int     MAX_CYCLES = 500_000;
+    localparam longint WR_BASE    = 64'h0000_0000;
+    localparam longint RD_BASE    = 64'h0010_0000;  // separate unwritten region
+    localparam longint STRIDE     = 64;             // cache-line aligned
 
     // ----------------------------------------------------------------
-    // Clock and reset
+    // Clock / reset
     // ----------------------------------------------------------------
-    logic clk   = 0;
-    logic rst_n = 0;
-
-    always #5 clk = ~clk;   // 10 ns / 100 MHz
+    logic clk  = 0;
+    logic nrst = 0;
+    always #5 clk = ~clk;  // 100 MHz
 
     // ----------------------------------------------------------------
     // AXI bus interface + DUT
     // ----------------------------------------------------------------
-    axi_bus_if axi(.CLK(clk), .nRST(rst_n));
+    axi_bus_if axi(.CLK(clk), .nRST(nrst));
     logic init_done;
 
-    ramulator_sv_wrapper #(
-        .CONFIG_FILE(CFG)
-    ) dut (
+    ramulator_sv_wrapper #(.CONFIG_FILE(CFG)) dut (
         .axi      (axi),
         .init_done(init_done)
     );
 
-    // TB always accepts R and B responses
-    assign axi.r_i_ready = 1'b1;
-    assign axi.b_i_ready = 1'b1;
+    // ----------------------------------------------------------------
+    // Scoreboard
+    // ----------------------------------------------------------------
+    longint shadow   [longint];      // functional model: addr → last written data
+    int     wr_acc   = 0, wr_cmp   = 0;
+    int     rd_acc   = 0, rd_cmp   = 0;
+    int     func_ok  = 0, func_fail = 0;
 
     // ----------------------------------------------------------------
-    // Per-request tracking
+    // Task: AXI write
+    //
+    //   Drives AW + W in the same cycle (wrapper constraint: both must
+    //   arrive simultaneously).  Waits for aw_o_ready handshake, then
+    //   collects the B response before returning.
     // ----------------------------------------------------------------
-    logic [ARADDR-1:0] t_addr   [NUM_REQS];
-    logic              t_type   [NUM_REQS];   // 0=read, 1=write
-    logic [WDATA-1:0]  t_wrdata [NUM_REQS];
-
-    // Shadow functional memory: addr -> last value written
-    longint shadow_mem  [longint];
-    bit     was_written [longint];
-
-    // Counters (shared between tasks and main)
-    int accepted_r  = 0;
-    int accepted_w  = 0;
-    int completed_r = 0;
-    int completed_w = 0;
-    int func_ok     = 0;
-    int func_fail   = 0;
-
-    // ----------------------------------------------------------------
-    // Task: issue one AXI read, wait for R response, check data
-    // ----------------------------------------------------------------
-    task automatic issue_read(input int idx);
-        longint exp_data;
-        longint got_data;
-
-        // Drive AR channel
-        axi.ar_o_valid  = 1'b1;
-        axi.ar_o.addr   = t_addr[idx];
-        axi.ar_o.mid_id = MID_ARID'(idx);
-        axi.ar_o.size   = 3'b011;    // 8-byte beat
-        axi.ar_o.len    = '0;        // 1 beat
-        axi.ar_o.burst  = 2'b01;     // INCR
-
-        // Wait for ar_o_ready handshake (retry if Ramulator queue full)
-        @(posedge clk); #1;
-        while (!axi.ar_o_ready) begin
-            @(posedge clk); #1;
-        end
-        axi.ar_o_valid = 1'b0;
-        accepted_r++;
-
-        // Wait for R response (r_i_ready=1, so one-cycle pulse)
-        while (!axi.r_i_valid) begin
-            @(posedge clk); #1;
-        end
-        got_data = longint'(axi.r_i.data);
-        completed_r++;
-
-        // Functional check
-        if (was_written.exists(longint'(t_addr[idx])))
-            exp_data = shadow_mem[longint'(t_addr[idx])];
-        else
-            exp_data = longint'(t_addr[idx]);   // wrapper default: returns addr
-
-        if (got_data === exp_data) begin
-            func_ok++;
-        end else begin
-            $display("  [FUNC MISMATCH] idx=%0d addr=0x%h  got=0x%h  expected=0x%h",
-                     idx, t_addr[idx], got_data, exp_data);
-            func_fail++;
-        end
-    endtask
-
-    // ----------------------------------------------------------------
-    // Task: issue one AXI write (AW+W together), wait for B response
-    // ----------------------------------------------------------------
-    task automatic issue_write(input int idx);
-        // Drive AW and W channels simultaneously (wrapper requires both)
+    task automatic axi_write(
+        input longint              addr,
+        input logic [WDATA-1:0]    data,
+        input logic [MID_AWID-1:0] mid_id
+    );
+        // Assert AW and W channels in the same cycle
         axi.aw_o_valid  = 1'b1;
-        axi.aw_o.addr   = t_addr[idx];
-        axi.aw_o.mid_id = MID_AWID'(idx);
-        axi.aw_o.size   = 3'b011;
-        axi.aw_o.len    = '0;
-        axi.aw_o.burst  = 2'b01;
+        axi.aw_o.addr   = AWADDR'(addr);
+        axi.aw_o.mid_id = mid_id;
+        axi.aw_o.size   = 3'b011;   // 8-byte beat
+        axi.aw_o.len    = 4'h0;     // single beat
+        axi.aw_o.burst  = 2'b01;    // INCR
 
         axi.w_o_valid   = 1'b1;
-        axi.w_o.data    = t_wrdata[idx];
-        axi.w_o.mid_id  = MID_ARID'(idx);
+        axi.w_o.data    = data;
+        axi.w_o.mid_id  = MID_ARID'(mid_id);  // sub_w_channel_t uses MID_ARID width
         axi.w_o.last    = 1'b1;
-        axi.w_o.strb    = '1;
+        axi.w_o.strb    = '1;       // all byte-enables asserted
 
-        // Wait for AW handshake (w_o_ready pulses simultaneously)
+        // Wait for AW ready handshake (retry each cycle if Ramulator queue full)
         @(posedge clk); #1;
         while (!axi.aw_o_ready) begin
             @(posedge clk); #1;
         end
         axi.aw_o_valid = 1'b0;
         axi.w_o_valid  = 1'b0;
-        accepted_w++;
+        wr_acc++;
+        shadow[addr] = longint'(data);
 
-        // Update shadow memory
-        shadow_mem[longint'(t_addr[idx])]  = longint'(t_wrdata[idx]);
-        was_written[longint'(t_addr[idx])] = 1;
-
-        // Wait for B response (b_i_ready=1; wrapper sets b_pending same cycle
-        // as aw_o_ready, so b_i_valid is already 1 here in most cases)
+        // B response: wrapper sets b_pending same cycle as aw_o_ready,
+        // so b_i_valid is already 1 here in the common case.
+        axi.b_i_ready = 1'b1;
         while (!axi.b_i_valid) begin
             @(posedge clk); #1;
         end
-        completed_w++;
+        @(posedge clk); #1;     // complete the handshake
+        axi.b_i_ready = 1'b0;
+        wr_cmp++;
     endtask
 
     // ----------------------------------------------------------------
-    // Main test flow
+    // Task: AXI read
+    //
+    //   Drives AR channel, waits for handshake, then collects the R
+    //   response.  Returns received data in got_data.
     // ----------------------------------------------------------------
-    int num_reads;
-    int num_writes;
+    task automatic axi_read(
+        input  longint               addr,
+        input  logic [MID_ARID-1:0]  mid_id,
+        output longint               got_data
+    );
+        axi.ar_o_valid  = 1'b1;
+        axi.ar_o.addr   = ARADDR'(addr);
+        axi.ar_o.mid_id = mid_id;
+        axi.ar_o.size   = 3'b011;
+        axi.ar_o.len    = 4'h0;
+        axi.ar_o.burst  = 2'b01;
 
-    initial begin : main_test
-        // Quiesce all master-side AXI outputs
+        // Wait for AR ready handshake
+        @(posedge clk); #1;
+        while (!axi.ar_o_ready) begin
+            @(posedge clk); #1;
+        end
         axi.ar_o_valid = 1'b0;
-        axi.ar_o       = '0;
-        axi.aw_o_valid = 1'b0;
-        axi.aw_o       = '0;
-        axi.w_o_valid  = 1'b0;
-        axi.w_o        = '0;
+        rd_acc++;
+
+        // R response: assert ready, wait for valid (Ramulator latency = many cycles)
+        axi.r_i_ready = 1'b1;
+        while (!axi.r_i_valid) begin
+            @(posedge clk); #1;
+        end
+        got_data = longint'(axi.r_i.data);
+        @(posedge clk); #1;     // complete the handshake
+        axi.r_i_ready = 1'b0;
+        rd_cmp++;
+    endtask
+
+    // ----------------------------------------------------------------
+    // Main test
+    // ----------------------------------------------------------------
+    initial begin : main
+        longint got, exp;
+        int     total_rd;
+
+        // Quiesce all master-driven channels before reset
+        axi.ar_o_valid = 1'b0;  axi.ar_o = '0;
+        axi.aw_o_valid = 1'b0;  axi.aw_o = '0;
+        axi.w_o_valid  = 1'b0;  axi.w_o  = '0;
+        axi.r_i_ready  = 1'b0;
+        axi.b_i_ready  = 1'b0;
 
         // Reset sequence
-        rst_n = 1'b0;
+        nrst = 1'b0;
         repeat(4) @(posedge clk);
-        rst_n = 1'b1;
+        nrst = 1'b1;
 
-        // ----------------------------------------------------------
-        // [1] Wait for init_done
-        // ----------------------------------------------------------
-        $display("=== Ramulator AXI SV wrapper smoke test ===");
-        $display("Config: %s\n", CFG);
+        // [1] Init
+        $display("=== AXI Ramulator wrapper smoketest ===");
+        $display("Config : %s", CFG);
         $write("[1] ramulator_init ... ");
         wait(init_done);
-        @(posedge clk);
+        @(posedge clk); #1;
         $display("OK");
 
-        // Build request list
-        num_reads  = 0;
-        num_writes = 0;
-        for (int i = 0; i < NUM_REQS; i++) begin
-            t_addr[i]   = ARADDR'(longint'(i) * ADDR_STRIDE);
-            t_type[i]   = (i % 4 == 0) ? 1'b1 : 1'b0;
-            t_wrdata[i] = longint'(t_addr[i]) ^ WR_PATTERN;
-            if (t_type[i]) num_writes++;
-            else           num_reads++;
+        // [2] Write phase
+        $display("[2] %0d writes (AW+W simultaneous, B ack per write) ...", NUM_WR);
+        for (int i = 0; i < NUM_WR; i++) begin
+            axi_write(
+                WR_BASE + longint'(i) * STRIDE,
+                WDATA'(64'hC0FFEE00_00000000 | longint'(i)),
+                MID_AWID'(i % (1 << MID_AWID))
+            );
         end
+        $display("    accepted=%0d  B-acks=%0d", wr_acc, wr_cmp);
 
-        // ----------------------------------------------------------
-        // [2] Issue all requests (one at a time; sequential for
-        //     simplicity — one outstanding read at a time lets the
-        //     TB match each R response to its request by position)
-        // ----------------------------------------------------------
-        $display("[2] Issuing %0d requests (%0d reads, %0d writes) ...",
-                 NUM_REQS, num_reads, num_writes);
-
-        for (int i = 0; i < NUM_REQS; i++) begin
-            if (t_type[i])
-                issue_write(i);
-            else
-                issue_read(i);
+        // [3] Read-after-write: expect shadow values
+        $display("[3] %0d reads (read-after-write, verify vs shadow) ...", NUM_WR);
+        for (int i = 0; i < NUM_WR; i++) begin
+            axi_read(
+                WR_BASE + longint'(i) * STRIDE,
+                MID_ARID'(i % (1 << MID_ARID)),
+                got
+            );
+            exp = shadow[WR_BASE + longint'(i) * STRIDE];
+            if (got === exp) begin
+                func_ok++;
+            end else begin
+                $display("  [MISMATCH] i=%0d addr=0x%08h  got=0x%016h  exp=0x%016h",
+                         i, WR_BASE + longint'(i) * STRIDE, got, exp);
+                func_fail++;
+            end
         end
+        $display("    accepted=%0d  R-data=%0d  OK=%0d  FAIL=%0d",
+                 rd_acc, rd_cmp, func_ok, func_fail);
 
-        // ----------------------------------------------------------
-        // Print results
-        // ----------------------------------------------------------
-        $display("\n--- Results ---");
-        $display("  Reads  accepted / completed : %0d / %0d  (of %0d)",
-                 accepted_r, completed_r, num_reads);
-        $display("  Writes accepted / completed : %0d / %0d  (of %0d)",
-                 accepted_w, completed_w, num_writes);
-        $display("  Functional checks OK / FAIL : %0d / %0d  (of %0d reads)",
-                 func_ok, func_fail, completed_r);
+        // [4] Raw reads: addresses never written; wrapper returns address as data
+        $display("[4] %0d raw reads (unwritten region, expect addr as return value) ...", NUM_RD_RAW);
+        for (int i = 0; i < NUM_RD_RAW; i++) begin
+            axi_read(
+                RD_BASE + longint'(i) * STRIDE,
+                MID_ARID'(i % (1 << MID_ARID)),
+                got
+            );
+            exp = RD_BASE + longint'(i) * STRIDE;
+            if (got === exp) begin
+                func_ok++;
+            end else begin
+                $display("  [MISMATCH] i=%0d addr=0x%08h  got=0x%016h  exp=0x%016h",
+                         i, RD_BASE + longint'(i) * STRIDE, got, exp);
+                func_fail++;
+            end
+        end
+        total_rd = NUM_WR + NUM_RD_RAW;
+        $display("    accepted=%0d  R-data=%0d  OK=%0d  FAIL=%0d",
+                 rd_acc, rd_cmp, func_ok, func_fail);
 
-        // [3] Accept check
-        $write("\n[3] ramulator_send_request ... ");
-        if (accepted_r == num_reads && accepted_w == num_writes)
-            $display("OK (all %0d accepted)", NUM_REQS);
-        else begin
-            $display("FAIL (reads %0d/%0d, writes %0d/%0d)",
-                     accepted_r, num_reads, accepted_w, num_writes);
+        // [5] Summary
+        $display("\n--- Summary ---");
+        $display("  Writes   : accepted=%0d / %0d   B-acks=%0d / %0d",
+                 wr_acc, NUM_WR, wr_cmp, NUM_WR);
+        $display("  Reads    : accepted=%0d / %0d   R-data=%0d / %0d",
+                 rd_acc, total_rd, rd_cmp, total_rd);
+        $display("  Functional: OK=%0d / %0d   FAIL=%0d",
+                 func_ok, total_rd, func_fail);
+
+        if (wr_acc   == NUM_WR   && wr_cmp  == NUM_WR   &&
+            rd_acc   == total_rd && rd_cmp  == total_rd &&
+            func_fail == 0)
+        begin
+            $display("\n=== PASSED ===");
+            ramulator_exit(0);
+        end else begin
+            $display("\n=== FAILED ===");
             ramulator_exit(1);
         end
-
-        // [4] Completion check
-        $write("[4] ramulator_check_response ... ");
-        if (completed_r == num_reads)
-            $display("OK (%0d read completions, %0d write acks)", completed_r, completed_w);
-        else begin
-            $display("FAIL - only %0d / %0d reads completed", completed_r, num_reads);
-            ramulator_exit(1);
-        end
-
-        // [5] Functional check
-        $write("[5] Functional model ... ");
-        if (func_fail == 0 && func_ok == completed_r)
-            $display("OK (all %0d reads returned correct data)", func_ok);
-        else begin
-            $display("FAIL - %0d / %0d reads returned wrong data", func_fail, completed_r);
-            ramulator_exit(1);
-        end
-
-        // [6] Done
-        $display("[6] ramulator_finalize ... OK (called in wrapper final block)");
-        $display("\n=== Smoke test PASSED ===");
-        ramulator_exit(0);
     end
 
     // ----------------------------------------------------------------
