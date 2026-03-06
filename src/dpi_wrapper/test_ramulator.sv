@@ -55,12 +55,22 @@ module test_ramulator;
     );
 
     // ----------------------------------------------------------------
+    // Tick counter — increments every rising clock edge
+    // ----------------------------------------------------------------
+    longint tick = 0;
+    always @(posedge clk) tick++;
+
+    // ----------------------------------------------------------------
     // Scoreboard
     // ----------------------------------------------------------------
     longint shadow   [longint];      // functional model: addr → last written data
     int     wr_acc   = 0, wr_cmp   = 0;
     int     rd_acc   = 0, rd_cmp   = 0;
     int     func_ok  = 0, func_fail = 0;
+
+    // Latency stats (cycles): write = AW valid → B ack; read = AR valid → R valid
+    longint wr_lat_min = '1, wr_lat_max = 0, wr_lat_total = 0;
+    longint rd_lat_min = '1, rd_lat_max = 0, rd_lat_total = 0;
 
     // ----------------------------------------------------------------
     // Task: AXI write
@@ -74,6 +84,9 @@ module test_ramulator;
         input logic [WDATA-1:0]    data,
         input logic [MID_AWID-1:0] mid_id
     );
+        longint t0, lat;
+        t0 = tick;
+
         // Assert AW and W channels in the same cycle
         axi.aw_o_valid  = 1'b1;
         axi.aw_o.addr   = AWADDR'(addr);
@@ -107,6 +120,12 @@ module test_ramulator;
         @(posedge clk); #1;     // complete the handshake
         axi.b_i_ready = 1'b0;
         wr_cmp++;
+
+        lat = tick - t0;
+        $display("    wr[%0d] addr=0x%08h  ticks=%0d", wr_cmp - 1, addr, lat);
+        if (lat < wr_lat_min) wr_lat_min = lat;
+        if (lat > wr_lat_max) wr_lat_max = lat;
+        wr_lat_total += lat;
     endtask
 
     // ----------------------------------------------------------------
@@ -120,6 +139,9 @@ module test_ramulator;
         input  logic [MID_ARID-1:0]  mid_id,
         output longint               got_data
     );
+        longint t0, lat;
+        t0 = tick;
+
         axi.ar_o_valid  = 1'b1;
         axi.ar_o.addr   = ARADDR'(addr);
         axi.ar_o.mid_id = mid_id;
@@ -144,6 +166,12 @@ module test_ramulator;
         @(posedge clk); #1;     // complete the handshake
         axi.r_i_ready = 1'b0;
         rd_cmp++;
+
+        lat = tick - t0;
+        $display("    rd[%0d] addr=0x%08h  ticks=%0d", rd_cmp - 1, addr, lat);
+        if (lat < rd_lat_min) rd_lat_min = lat;
+        if (lat > rd_lat_max) rd_lat_max = lat;
+        rd_lat_total += lat;
     endtask
 
     // ----------------------------------------------------------------
@@ -227,10 +255,15 @@ module test_ramulator;
 
         // [5] Summary
         $display("\n--- Summary ---");
+        $display("  Total ticks        : %0d", tick);
         $display("  Writes   : accepted=%0d / %0d   B-acks=%0d / %0d",
                  wr_acc, NUM_WR, wr_cmp, NUM_WR);
+        $display("  Write latency (ticks): min=%0d  max=%0d  avg=%0d",
+                 wr_lat_min, wr_lat_max, wr_lat_total / wr_cmp);
         $display("  Reads    : accepted=%0d / %0d   R-data=%0d / %0d",
                  rd_acc, total_rd, rd_cmp, total_rd);
+        $display("  Read  latency (ticks): min=%0d  max=%0d  avg=%0d",
+                 rd_lat_min, rd_lat_max, rd_lat_total / rd_cmp);
         $display("  Functional: OK=%0d / %0d   FAIL=%0d",
                  func_ok, total_rd, func_fail);
 
