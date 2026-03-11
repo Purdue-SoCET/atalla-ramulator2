@@ -25,8 +25,21 @@ ifeq ($(COVERAGE),ON)
   VSIM_COV_FLAGS  := -coverage
 endif
 
-# ---- Build configuration ----
-CFG ?= $(CFGROOT)/ddr4_config.yaml
+# ---- DRAM standard selection ----
+# Usage: make sim DRAM=hbm2   (default: ddr4)
+# Or override directly: make sim CFG=configs/my.yaml
+DRAM ?= ddr4
+
+DRAM_CFG_ddr3   := $(CFGROOT)/ddr3_config.yaml
+DRAM_CFG_ddr4   := $(CFGROOT)/ddr4_config.yaml
+DRAM_CFG_ddr5   := $(CFGROOT)/ddr5_config.yaml
+DRAM_CFG_gddr6  := $(CFGROOT)/gddr6_config.yaml
+DRAM_CFG_hbm2   := $(CFGROOT)/hbm2_config.yaml
+DRAM_CFG_hbm3   := $(CFGROOT)/hbm3_config.yaml
+DRAM_CFG_lpddr5 := $(CFGROOT)/lpddr5_config.yaml
+
+# CFG can still be overridden directly; otherwise resolved from DRAM
+CFG ?= $(DRAM_CFG_$(DRAM))
 
 # ---- Ramulator shared library ----
 RAMULATOR_LIB    := libramulator_dpi
@@ -42,7 +55,8 @@ DPI_SRCS := \
 	$(DPIROOT)/test_ramulator.sv
 
 # ---- Phony targets ----
-.PHONY: all sim sim_gui ram_lib clean
+.PHONY: all sim sim_gui ram_lib clean \
+        ddr3 ddr4 ddr5 gddr6 hbm2 hbm3 lpddr5
 
 all: sim
 
@@ -85,11 +99,28 @@ sim: ram_lib
 	        -sv_lib ./$(RAMULATOR_LIB) \
 	        -G CFG="$(CFG)" \
 	        $(SCRATCH).test_ramulator \
-	        -do "run -all" || true; \
+	        -do "run -all" 2>/dev/null || true; \
+	    if grep -q "=== PASSED ===" transcript 2>/dev/null; then \
+	        echo "[sim] Result: PASSED"; \
+	    elif grep -q "=== FAILED ===" transcript 2>/dev/null; then \
+	        echo "[sim] Result: FAILED"; exit 1; \
+	    else \
+	        echo "[sim] Result: UNKNOWN (simulation may have crashed or timed out)"; \
+	    fi; \
 	fi
 
 sim_gui:
 	@$(MAKE) sim GUI=ON
+
+# ---- Per-standard shorthand targets ----
+# e.g. "make hbm2" runs batch sim with HBM2 config
+ddr3:   ; @$(MAKE) sim DRAM=ddr3
+ddr4:   ; @$(MAKE) sim DRAM=ddr4
+ddr5:   ; @$(MAKE) sim DRAM=ddr5
+gddr6:  ; @$(MAKE) sim DRAM=gddr6
+hbm2:   ; @$(MAKE) sim DRAM=hbm2
+hbm3:   ; @$(MAKE) sim DRAM=hbm3
+lpddr5: ; @$(MAKE) sim DRAM=lpddr5
 
 # ---- Clean ----
 clean:

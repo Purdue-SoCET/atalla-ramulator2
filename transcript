@@ -1,3 +1,6 @@
+# vsim -c -voptargs="+acc" -sv_lib ./libramulator_dpi work.test_ramulator -do "run -all" -GCFG=./configs/ddr3_config.yaml 
+# Start time: 03:18:07 on Mar 11,2026
+# ** Note: (vsim-3812) Design is being optimized...
 # //  Questa Sim-64
 # //  Version 2021.4 linux_x86_64 Oct 13 2021
 # //
@@ -12,26 +15,16 @@
 # //  is prohibited from disclosure under the Trade Secrets Act,
 # //  18 U.S.C. Section 1905.
 # //
-# vsim -voptargs="+acc" -sv_lib ./libramulator_dpi work.test_ramulator -onfinish stop -do "view objects; do ./waves/test_ramulator.do; run -all" -GCFG=./configs/ddr4_config.yaml 
-# Start time: 01:47:24 on Mar 11,2026
-# ** Note: (vsim-3812) Design is being optimized...
 # Loading sv_std.std
 # Loading work.axi_bus_pkg(fast)
 # Loading work.test_ramulator(fast)
 # Loading work.axi_bus_if(fast__1)
 # Loading work.ramulator_sv_wrapper(fast)
 # Loading ././libramulator_dpi.so
-# view objects
-# .main_pane.objects.interior.cs.body.tree
-#  do ./waves/test_ramulator.do
-# .main_pane.wave.interior.cs.body.pw.wf
-# .main_pane.structure.interior.cs.body.struct
-# .main_pane.objects.interior.cs.body.tree
-# sim:/test_ramulator
-#  run -all
+# run -all
 # === AXI Ramulator wrapper smoketest ===
-# Config : ./configs/ddr4_config.yaml
-# [1] ramulator_init ... [ramulator_sv_wrapper] Init OK (config=./configs/ddr4_config.yaml)
+# Config : ./configs/ddr3_config.yaml
+# [1] ramulator_init ... [ramulator_sv_wrapper] Init OK (config=./configs/ddr3_config.yaml)
 # OK
 # [2] 16 writes (AW+W simultaneous, B ack per write) ...
 #     wr[0] addr=0x00000000  ticks=2
@@ -52,17 +45,18 @@
 #     wr[15] addr=0x000003c0  ticks=2
 #     accepted=16  B-acks=16
 # [3] 16 reads (read-after-write, verify vs shadow) ...
-#     rd[0] addr=0x00000000  ticks=206
-#     rd[1] addr=0x00000040  ticks=76
-#     rd[2] addr=0x00000080  ticks=88
-#     rd[3] addr=0x000000c0  ticks=41
-# ** Fatal: (SIGSEGV) Bad handle or reference.
-#    Time: 4515 ns  Iteration: 1  Process: /test_ramulator/dut/#ALWAYS#142 File: ./src/dpi_wrapper/ramulator_sv_wrapper.sv
-# Fatal error in Module ramulator_sv_wrapper at ./src/dpi_wrapper/ramulator_sv_wrapper.sv line 50
-# 
-# HDL call sequence:
-# Stopped at ./src/dpi_wrapper/ramulator_sv_wrapper.sv 50 Module ramulator_sv_wrapper
-# called from  ./src/dpi_wrapper/ramulator_sv_wrapper.sv 239 Module ramulator_sv_wrapper
-# 
-# End time: 01:47:53 on Mar 11,2026, Elapsed time: 0:00:29
-# Errors: 1, Warnings: 0
+#     rd[0] addr=0x00000000  ticks=52
+#     rd[1] addr=0x00000040  ticks=35
+#     rd[2] addr=0x00000080  ticks=35
+#     rd[3] addr=0x000000c0  ticks=18
+#     rd[4] addr=0x00000100  ticks=18
+#     rd[5] addr=0x00000140  ticks=18
+#     rd[6] addr=0x00000180  ticks=18
+#     rd[7] addr=0x000001c0  ticks=18
+#     rd[8] addr=0x00000200  ticks=18
+#     rd[9] addr=0x00000240  ticks=18
+#     rd[10] addr=0x00000280  ticks=18
+#     rd[11] addr=0x000002c0  ticks=18
+# Break key hit
+# Break key hit
+# Break key hit
