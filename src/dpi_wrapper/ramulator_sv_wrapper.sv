@@ -14,11 +14,15 @@
 //     always returns a single R beat with last=1).
 //   - AW and W must arrive in the same cycle for a write to be issued.
 //   - At most one pending R response at a time (Ramulator drains one/cycle).
+//   - B responses are buffered in a small FIFO (depth B_DEPTH).  New writes
+//     are accepted as long as the FIFO has space, decoupling write acceptance
+//     from B-channel drain rate.
 
 `timescale 1ns / 1ps
 
 module ramulator_sv_wrapper #(
-    parameter string CONFIG_FILE = "ramulator_config.yaml"
+    parameter string CONFIG_FILE = "ramulator_config.yaml",
+    parameter int    B_DEPTH     = 4        // B-response FIFO depth
 )(
     axi_bus_if  axi,
     output logic init_done
@@ -66,20 +70,24 @@ module ramulator_sv_wrapper #(
     logic           r_pending;
     sub_r_channel_t r_reg;
 
-    // Pending write response
-    logic           b_pending;
-    sub_b_channel_t b_reg;
+    // B-response FIFO: accepts up to B_DEPTH outstanding write responses
+    // before back-pressuring the AW channel.
+    sub_b_channel_t b_fifo [B_DEPTH];
+    int             b_cnt;          // entries currently in FIFO
+    int             b_rd;           // read pointer  (head of FIFO)
+    int             b_wr;           // write pointer (tail of FIFO)
+    int             b_cnt_next;     // blocking intermediate for simultaneous drain+push
 
     // Map read address -> mid_id so the R response carries the right ID
     logic [MID_ARID-1:0] read_mid_id [longint];
 
     // ----------------------------------------------------------------
-    // r_i_valid / b_i_valid driven combinatorially from state
+    // Combinatorial outputs
     // ----------------------------------------------------------------
     assign axi.r_i_valid = r_pending;
     assign axi.r_i       = r_reg;
-    assign axi.b_i_valid = b_pending;
-    assign axi.b_i       = b_reg;
+    assign axi.b_i_valid = (b_cnt > 0);
+    assign axi.b_i       = b_fifo[b_rd];
 
     // ----------------------------------------------------------------
     // Initialization
@@ -88,7 +96,9 @@ module ramulator_sv_wrapper #(
         handle    = null;
         init_done = 1'b0;
         r_pending = 1'b0;
-        b_pending = 1'b0;
+        b_cnt     = 0;
+        b_rd      = 0;
+        b_wr      = 0;
 
         wait (axi.nRST === 1'b0);
         wait (axi.nRST === 1'b1);
@@ -119,9 +129,15 @@ module ramulator_sv_wrapper #(
     // Each cycle (in order):
     //   1. Drain one read completion from Ramulator → R response register
     //   2. Accept AR channel → issue Ramulator read
-    //   3. Accept B response when r_i_ready
-    //   4. Accept AW+W channels → issue Ramulator write → B response
-    //   5. Advance Ramulator clock
+    //   3. Drain one B entry from FIFO if b_i_ready (blocking: b_cnt_next--)
+    //   4. Accept AW+W if FIFO has space (b_cnt_next < B_DEPTH) →
+    //        issue Ramulator write → push B entry (blocking: b_cnt_next++)
+    //   5. Commit b_cnt <= b_cnt_next
+    //   6. Advance Ramulator clock
+    //
+    // Steps 3 and 4 use b_cnt_next as a blocking intermediate so that
+    // a simultaneous drain+push is handled correctly (count stays the
+    // same, both pointers advance).
     // ----------------------------------------------------------------
     always @(posedge axi.CLK or negedge axi.nRST) begin
         if (!axi.nRST) begin
@@ -130,8 +146,9 @@ module ramulator_sv_wrapper #(
             axi.w_o_ready  <= 1'b0;
             r_pending      <= 1'b0;
             r_reg          <= '0;
-            b_pending      <= 1'b0;
-            b_reg          <= '0;
+            b_cnt          <= 0;
+            b_rd           <= 0;
+            b_wr           <= 0;
 
         end else if (init_done) begin
 
@@ -179,16 +196,22 @@ module ramulator_sv_wrapper #(
             end
 
             // ----------------------------------------------------------
-            // 3. Clear B response when accepted by response router
+            // 3. Drain head of B FIFO if accepted by response router.
+            //    Uses blocking b_cnt_next so step 4 sees the updated count.
             // ----------------------------------------------------------
-            if (b_pending && axi.b_i_ready)
-                b_pending <= 1'b0;
+            b_cnt_next = b_cnt;
+
+            if (b_cnt_next > 0 && axi.b_i_ready) begin
+                b_rd       <= (b_rd + 1 == B_DEPTH) ? 0 : b_rd + 1;
+                b_cnt_next = b_cnt_next - 1;
+            end
 
             // ----------------------------------------------------------
-            // 4. Accept AW+W → issue Ramulator write → B response
-            //    Require both valid simultaneously; wait until B is free.
+            // 4. Accept AW+W → issue Ramulator write → push B entry
+            //    A new write is accepted as long as the B FIFO has space
+            //    after accounting for any drain this cycle (b_cnt_next).
             // ----------------------------------------------------------
-            if (axi.aw_o_valid && axi.w_o_valid && (!b_pending || axi.b_i_ready)) begin
+            if (axi.aw_o_valid && axi.w_o_valid && b_cnt_next < B_DEPTH) begin
                 dpi_accepted = ramulator_send_request(
                     handle,
                     longint'(axi.aw_o.addr),
@@ -197,16 +220,21 @@ module ramulator_sv_wrapper #(
                     longint'(axi.w_o.data)
                 );
                 if (dpi_accepted) begin
-                    b_reg.id       <= axi.aw_o.mid_id[BID-1:0];
-                    b_reg.resp     <= B_OKAY;
-                    b_pending      <= 1'b1;
+                    b_fifo[b_wr]   <= '{id: axi.aw_o.mid_id[BID-1:0], resp: B_OKAY};
+                    b_wr           <= (b_wr + 1 == B_DEPTH) ? 0 : b_wr + 1;
+                    b_cnt_next     = b_cnt_next + 1;
                     axi.aw_o_ready <= 1'b1;
                     axi.w_o_ready  <= 1'b1;
                 end
             end
 
             // ----------------------------------------------------------
-            // 5. Advance Ramulator by one cycle
+            // 5. Commit final B FIFO count
+            // ----------------------------------------------------------
+            b_cnt <= b_cnt_next;
+
+            // ----------------------------------------------------------
+            // 6. Advance Ramulator by one cycle
             // ----------------------------------------------------------
             ramulator_tick(handle);
 

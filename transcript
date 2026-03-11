@@ -1,8 +1,3 @@
-# vsim -coverage -c -voptargs="+acc" -sv_lib ./libramulator_dpi work.test_ramulator -do "run -all" -GCFG=configs/ddr4_config.yaml 
-# Start time: 19:04:09 on Mar 05,2026
-# ** Note: (vsim-3812) Design is being optimized...
-# ** Warning: (vopt-3040) Command line generic/parameter "CFG" not found in design.
-# ** Note: (vsim-12126) Error and warning message counts have been restored: Errors=0, Warnings=1.
 # //  Questa Sim-64
 # //  Version 2021.4 linux_x86_64 Oct 13 2021
 # //
@@ -17,17 +12,26 @@
 # //  is prohibited from disclosure under the Trade Secrets Act,
 # //  18 U.S.C. Section 1905.
 # //
+# vsim -voptargs="+acc" -sv_lib ./libramulator_dpi work.test_ramulator -onfinish stop -do "view objects; do ./waves/test_ramulator.do; run -all" -GCFG=./configs/ddr4_config.yaml 
+# Start time: 01:47:24 on Mar 11,2026
+# ** Note: (vsim-3812) Design is being optimized...
 # Loading sv_std.std
 # Loading work.axi_bus_pkg(fast)
 # Loading work.test_ramulator(fast)
 # Loading work.axi_bus_if(fast__1)
 # Loading work.ramulator_sv_wrapper(fast)
 # Loading ././libramulator_dpi.so
-# ** Warning: (vsim-8634) Code was not compiled with coverage options.
-# run -all
+# view objects
+# .main_pane.objects.interior.cs.body.tree
+#  do ./waves/test_ramulator.do
+# .main_pane.wave.interior.cs.body.pw.wf
+# .main_pane.structure.interior.cs.body.struct
+# .main_pane.objects.interior.cs.body.tree
+# sim:/test_ramulator
+#  run -all
 # === AXI Ramulator wrapper smoketest ===
-# Config : configs/ddr4_config.yaml
-# [1] ramulator_init ... [ramulator_sv_wrapper] Init OK (config=configs/ddr4_config.yaml)
+# Config : ./configs/ddr4_config.yaml
+# [1] ramulator_init ... [ramulator_sv_wrapper] Init OK (config=./configs/ddr4_config.yaml)
 # OK
 # [2] 16 writes (AW+W simultaneous, B ack per write) ...
 #     wr[0] addr=0x00000000  ticks=2
@@ -52,36 +56,13 @@
 #     rd[1] addr=0x00000040  ticks=76
 #     rd[2] addr=0x00000080  ticks=88
 #     rd[3] addr=0x000000c0  ticks=41
-#     rd[4] addr=0x00000100  ticks=41
-#     rd[5] addr=0x00000140  ticks=23
-#     rd[6] addr=0x00000180  ticks=23
-#     rd[7] addr=0x000001c0  ticks=23
-#     rd[8] addr=0x00000200  ticks=41
-#     rd[9] addr=0x00000240  ticks=23
-#     rd[10] addr=0x00000280  ticks=23
-#     rd[11] addr=0x000002c0  ticks=23
-#     rd[12] addr=0x00000300  ticks=41
-#     rd[13] addr=0x00000340  ticks=23
-#     rd[14] addr=0x00000380  ticks=23
-#     rd[15] addr=0x000003c0  ticks=23
-#     accepted=16  R-data=16  OK=16  FAIL=0
-# [4] 8 raw reads (unwritten region, expect addr as return value) ...
-#     rd[16] addr=0x00100000  ticks=41
-#     rd[17] addr=0x00100040  ticks=23
-#     rd[18] addr=0x00100080  ticks=23
-#     rd[19] addr=0x001000c0  ticks=23
-#     rd[20] addr=0x00100100  ticks=41
-#     rd[21] addr=0x00100140  ticks=23
-#     rd[22] addr=0x00100180  ticks=23
-#     rd[23] addr=0x001001c0  ticks=23
-#     accepted=24  R-data=24  OK=24  FAIL=0
+# ** Fatal: (SIGSEGV) Bad handle or reference.
+#    Time: 4515 ns  Iteration: 1  Process: /test_ramulator/dut/#ALWAYS#142 File: ./src/dpi_wrapper/ramulator_sv_wrapper.sv
+# Fatal error in Module ramulator_sv_wrapper at ./src/dpi_wrapper/ramulator_sv_wrapper.sv line 50
 # 
-# --- Summary ---
-#   Total ticks        : 999
-#   Writes   : accepted=16 / 16   B-acks=16 / 16
-#   Write latency (ticks): min=-1  max=2  avg=2
-#   Reads    : accepted=24 / 24   R-data=24 / 24
-#   Read  latency (ticks): min=-1  max=206  avg=40
-#   Functional: OK=24 / 24   FAIL=0
+# HDL call sequence:
+# Stopped at ./src/dpi_wrapper/ramulator_sv_wrapper.sv 50 Module ramulator_sv_wrapper
+# called from  ./src/dpi_wrapper/ramulator_sv_wrapper.sv 239 Module ramulator_sv_wrapper
 # 
-# === PASSED ===
+# End time: 01:47:53 on Mar 11,2026, Elapsed time: 0:00:29
+# Errors: 1, Warnings: 0
