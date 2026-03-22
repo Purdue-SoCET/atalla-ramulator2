@@ -1,5 +1,5 @@
-# vsim -c -voptargs="+acc" -sv_lib ./libramulator_dpi work.test_ramulator -do "run -all" -GCFG=./configs/ddr3_config.yaml 
-# Start time: 03:18:07 on Mar 11,2026
+# vsim -c -voptargs="+acc" -sv_lib ./libramulator_dpi work.test_ramulator -do "run -all" -GCFG=./configs/ddr4_config.yaml 
+# Start time: 14:43:40 on Mar 14,2026
 # ** Note: (vsim-3812) Design is being optimized...
 # //  Questa Sim-64
 # //  Version 2021.4 linux_x86_64 Oct 13 2021
@@ -23,8 +23,8 @@
 # Loading ././libramulator_dpi.so
 # run -all
 # === AXI Ramulator wrapper smoketest ===
-# Config : ./configs/ddr3_config.yaml
-# [1] ramulator_init ... [ramulator_sv_wrapper] Init OK (config=./configs/ddr3_config.yaml)
+# Config : ./configs/ddr4_config.yaml
+# [1] ramulator_init ... [ramulator_sv_wrapper] Init OK (config=./configs/ddr4_config.yaml)
 # OK
 # [2] 16 writes (AW+W simultaneous, B ack per write) ...
 #     wr[0] addr=0x00000000  ticks=2
@@ -45,18 +45,69 @@
 #     wr[15] addr=0x000003c0  ticks=2
 #     accepted=16  B-acks=16
 # [3] 16 reads (read-after-write, verify vs shadow) ...
-#     rd[0] addr=0x00000000  ticks=52
-#     rd[1] addr=0x00000040  ticks=35
-#     rd[2] addr=0x00000080  ticks=35
-#     rd[3] addr=0x000000c0  ticks=18
-#     rd[4] addr=0x00000100  ticks=18
-#     rd[5] addr=0x00000140  ticks=18
-#     rd[6] addr=0x00000180  ticks=18
-#     rd[7] addr=0x000001c0  ticks=18
-#     rd[8] addr=0x00000200  ticks=18
-#     rd[9] addr=0x00000240  ticks=18
-#     rd[10] addr=0x00000280  ticks=18
-#     rd[11] addr=0x000002c0  ticks=18
-# Break key hit
-# Break key hit
-# Break key hit
+#     rd[0] addr=0x00000000  ticks=206
+#     rd[1] addr=0x00000040  ticks=76
+#     rd[2] addr=0x00000080  ticks=88
+#     rd[3] addr=0x000000c0  ticks=41
+#     rd[4] addr=0x00000100  ticks=41
+#     rd[5] addr=0x00000140  ticks=23
+#     rd[6] addr=0x00000180  ticks=23
+#     rd[7] addr=0x000001c0  ticks=23
+#     rd[8] addr=0x00000200  ticks=41
+#     rd[9] addr=0x00000240  ticks=23
+#     rd[10] addr=0x00000280  ticks=23
+#     rd[11] addr=0x000002c0  ticks=23
+#     rd[12] addr=0x00000300  ticks=41
+#     rd[13] addr=0x00000340  ticks=23
+#     rd[14] addr=0x00000380  ticks=23
+#     rd[15] addr=0x000003c0  ticks=23
+#     accepted=16  R-data=16  OK=16  FAIL=0
+# [4] 8 raw reads (unwritten region, expect addr as data) ...
+#     rd[16] addr=0x00100000  ticks=41
+#     rd[17] addr=0x00100040  ticks=23
+#     rd[18] addr=0x00100080  ticks=23
+#     rd[19] addr=0x001000c0  ticks=23
+#     rd[20] addr=0x00100100  ticks=41
+#     rd[21] addr=0x00100140  ticks=23
+#     rd[22] addr=0x00100180  ticks=23
+#     rd[23] addr=0x001001c0  ticks=23
+#     accepted=24  R-data=24  OK=24  FAIL=0
+# [5] Read backpressure: 48 ARs issued with r_i_ready=0 ...
+#     flood AR[36] addr=0x00200900  stall=2 cycles (backpressure)
+#     flood AR[37] addr=0x00200940  stall=25 cycles (backpressure)
+#     flood AR[38] addr=0x00200980  stall=22 cycles (backpressure)
+#     flood AR[39] addr=0x002009c0  stall=6 cycles (backpressure)
+#     flood AR[40] addr=0x00200a00  stall=6 cycles (backpressure)
+#     flood AR[41] addr=0x00200a40  stall=25 cycles (backpressure)
+#     flood AR[42] addr=0x00200a80  stall=22 cycles (backpressure)
+#     flood AR[43] addr=0x00200ac0  stall=6 cycles (backpressure)
+#     flood AR[44] addr=0x00200b00  stall=6 cycles (backpressure)
+#     flood AR[45] addr=0x00200b40  stall=25 cycles (backpressure)
+#     flood AR[46] addr=0x00200b80  stall=22 cycles (backpressure)
+#     flood AR[47] addr=0x00200bc0  stall=6 cycles (backpressure)
+#     All 48 ARs accepted. Max stall=25 cycles. Draining ...
+#     Drained 48 R responses.
+# [6] Write backpressure: fill 4-deep B FIFO then stall ...
+#     write[0] accepted (stall=1, FIFO count=1/4)
+#     write[1] accepted (stall=1, FIFO count=2/4)
+#     write[2] accepted (stall=1, FIFO count=3/4)
+#     write[3] accepted (stall=1, FIFO count=4/4)
+#     B FIFO full. Driving write[4] with b_i_ready=0 ...
+#     write[4]: correctly stalled for 20 cycles (FIFO full).
+#     write[4] accepted after stall.
+#     All 5 B-acks collected. bp_wr_acc=5  bp_wr_cmp=5
+# [7] Simultaneous read + write ...
+#     AR and AW accepted in same cycle (tick=1737).
+#     Simul-read  OK : got=0x0000000000400000
+#     Read-back   OK : got=0xfeedfacecafebabe
+# 
+# --- Summary ---
+#   Total ticks   : 1855
+#   [2] Writes    : acc=16/16  B-acks=16/16  lat(min/max/avg)=2/2/2
+#   [3-4] Reads   : acc=24/24  R-data=24/24  lat(min/max/avg)=23/206/40
+#   [3-4] Functional: OK=24/24  FAIL=0
+#   [5] RD flood  : ARs acc=48/48  R drained=48/48  max_stall=25 cycles
+#   [6] WR BP     : writes acc=5/5  B-acks=5/5  stall=20 cycles
+#   [7] Simul     : rd acc=2/2  rd cmp=2/2  wr acc=1/1  wr cmp=1/1  func OK=2  FAIL=0
+# 
+# === PASSED ===
