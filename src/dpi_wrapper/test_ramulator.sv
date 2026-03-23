@@ -11,7 +11,9 @@
 //                            verify next write stalls; drain all B-acks
 //   [7] Simultaneous R+W  — assert AR + AW+W in the same cycle; verify both
 //                            accepted; check R data; read-back written addr
-//   [8] Pass/fail summary
+//   [8] Multi-beat INCR bursts — 4-beat and 8-beat write+read bursts;
+//                            verify per-beat data and last flag
+//   [9] Pass/fail summary
 
 `timescale 1ns / 1ps
 
@@ -41,6 +43,8 @@ module test_ramulator #(
     localparam longint FLOOD_BASE   = 64'h0020_0000;
     localparam longint BP_WR_BASE   = 64'h0030_0000;
     localparam longint SIMUL_BASE   = 64'h0040_0000;
+    localparam longint BURST4_BASE  = 64'h0050_0000;  // [8] 4-beat burst test
+    localparam longint BURST8_BASE  = 64'h0060_0000;  // [8] 8-beat burst test
     localparam longint STRIDE       = 64;
 
     // ----------------------------------------------------------------
@@ -95,6 +99,10 @@ module test_ramulator #(
     int     sim_rd_acc = 0, sim_rd_cmp = 0;
     int     sim_wr_acc = 0, sim_wr_cmp = 0;
     int     sim_func_ok = 0, sim_func_fail = 0;
+
+    // Scoreboard — [8] multi-beat INCR bursts
+    int     burst_wr_ok = 0, burst_wr_fail = 0;
+    int     burst_rd_ok = 0, burst_rd_fail = 0;
 
     // ----------------------------------------------------------------
     // Task: full AXI write (issue AW+W, wait for aw_o_ready, collect B)
@@ -249,6 +257,124 @@ module test_ramulator #(
         shadow[addr] = longint'(data);
         bp_wr_acc++;
         stall_cycles = tick - t0;
+    endtask
+
+    // ----------------------------------------------------------------
+    // Task: INCR write burst.
+    //   Sends AW + W[0] together, then W[1]..W[len] in successive cycles.
+    //   Waits for the single B ack that follows the last W beat.
+    //   Data for beat i: base_data + i.  Shadow memory updated per beat.
+    // ----------------------------------------------------------------
+    task automatic axi_write_burst(
+        input  longint              base_addr,
+        input  longint              base_data,
+        input  int                  len,        // beats - 1  (0 = single beat)
+        input  logic [2:0]          size,       // log2(bytes per beat)
+        input  logic [MID_AWID-1:0] mid_id
+    );
+        int stride;
+        stride = 1 << int'(size);
+
+        // --- Issue AW + W[0] ---
+        axi.aw_o_valid  = 1'b1;
+        axi.aw_o.addr   = AWADDR'(base_addr);
+        axi.aw_o.mid_id = mid_id;
+        axi.aw_o.size   = size;
+        axi.aw_o.len    = AWLEN'(len);
+        axi.aw_o.burst  = 2'b01;       // INCR
+
+        axi.w_o_valid   = 1'b1;
+        axi.w_o.data    = WDATA'(base_data);
+        axi.w_o.mid_id  = MID_ARID'(mid_id);
+        axi.w_o.last    = (len == 0) ? 1'b1 : 1'b0;
+        axi.w_o.strb    = '1;
+
+        @(posedge clk); #1;
+        while (!axi.aw_o_ready) begin @(posedge clk); #1; end
+        // AW and W[0] accepted simultaneously
+        axi.aw_o_valid = 1'b0;
+        shadow[base_addr] = base_data;
+
+        // --- Issue W[1]..W[len] ---
+        for (int i = 1; i <= len; i++) begin
+            longint baddr, bdata;
+            baddr = base_addr + longint'(i) * longint'(stride);
+            bdata = base_data + longint'(i);
+            // Update W channel before the next posedge so wrapper sees it
+            axi.w_o.data = WDATA'(bdata);
+            axi.w_o.last = (i == len) ? 1'b1 : 1'b0;
+            axi.w_o_valid = 1'b1;
+            @(posedge clk); #1;
+            while (!axi.w_o_ready) begin @(posedge clk); #1; end
+            shadow[baddr] = bdata;
+        end
+        axi.w_o_valid = 1'b0;
+
+        // --- Wait for B ack ---
+        axi.b_i_ready = 1'b1;
+        while (!axi.b_i_valid) begin @(posedge clk); #1; end
+        @(posedge clk); #1;
+        axi.b_i_ready = 1'b0;
+    endtask
+
+    // ----------------------------------------------------------------
+    // Task: INCR read burst.
+    //   Issues AR with len/size, collects len+1 R beats in order.
+    //   Verifies each beat's data against shadow (or address if unwritten).
+    //   Also checks the last flag.  Updates burst_rd_ok / burst_rd_fail.
+    // ----------------------------------------------------------------
+    task automatic axi_read_burst(
+        input  longint              base_addr,
+        input  int                  len,
+        input  logic [2:0]          size,
+        input  logic [MID_ARID-1:0] mid_id
+    );
+        int stride;
+        stride = 1 << int'(size);
+
+        // --- Issue AR ---
+        axi.ar_o_valid  = 1'b1;
+        axi.ar_o.addr   = ARADDR'(base_addr);
+        axi.ar_o.mid_id = mid_id;
+        axi.ar_o.size   = size;
+        axi.ar_o.len    = ARLEN'(len);
+        axi.ar_o.burst  = 2'b01;       // INCR
+
+        @(posedge clk); #1;
+        while (!axi.ar_o_ready) begin @(posedge clk); #1; end
+        axi.ar_o_valid = 1'b0;
+
+        // --- Collect R beats ---
+        for (int i = 0; i <= len; i++) begin
+            longint baddr, got, exp;
+            logic   got_last;
+            baddr = base_addr + longint'(i) * longint'(stride);
+
+            axi.r_i_ready = 1'b1;
+            while (!axi.r_i_valid) begin @(posedge clk); #1; end
+            got      = longint'(axi.r_i.data);
+            got_last = axi.r_i.last;
+            @(posedge clk); #1;
+            axi.r_i_ready = 1'b0;
+
+            // Verify data
+            exp = shadow.exists(baddr) ? shadow[baddr] : baddr;
+            if (got === exp) burst_rd_ok++;
+            else begin
+                $display("  [BURST RD MISMATCH] beat=%0d addr=0x%08h got=0x%016h exp=0x%016h",
+                         i, baddr, got, exp);
+                burst_rd_fail++;
+            end
+
+            // Verify last flag
+            if ((i == len) && !got_last) begin
+                $display("  [BURST RD ERROR] beat=%0d: expected last=1, got last=0", i);
+                burst_rd_fail++;
+            end else if ((i < len) && got_last) begin
+                $display("  [BURST RD ERROR] beat=%0d: expected last=0, got last=1", i);
+                burst_rd_fail++;
+            end
+        end
     endtask
 
     // ----------------------------------------------------------------
@@ -576,7 +702,36 @@ module test_ramulator #(
         end
 
         // ============================================================
-        // [8] Summary
+        // [8] Multi-beat INCR bursts
+        //
+        // 8a. 4-beat write burst (len=3, size=3, 8 B/beat) → verify B ack
+        // 8b. 4-beat read burst  → verify R data matches shadow + last flag
+        // 8c. 8-beat write burst (len=7)
+        // 8d. 8-beat read burst  → verify data + last flag
+        // ============================================================
+        $display("[8] Multi-beat INCR bursts ...");
+
+        // 8a/8b: 4-beat burst
+        $display("  [8a] 4-beat write burst at 0x%08h (len=3, size=3)", BURST4_BASE);
+        axi_write_burst(BURST4_BASE, 64'hCAFE_0000_0050_0000, 3, 3'b011, MID_AWID'(0));
+        $display("  [8b] 4-beat read burst  at 0x%08h", BURST4_BASE);
+        axi_read_burst(BURST4_BASE, 3, 3'b011, MID_ARID'(0));
+        $display("    4-beat: rd_ok=%0d  rd_fail=%0d", burst_rd_ok, burst_rd_fail);
+
+        // 8c/8d: 8-beat burst
+        $display("  [8c] 8-beat write burst at 0x%08h (len=7, size=3)", BURST8_BASE);
+        axi_write_burst(BURST8_BASE, 64'hDEAD_0000_0060_0000, 7, 3'b011, MID_AWID'(1));
+        $display("  [8d] 8-beat read burst  at 0x%08h", BURST8_BASE);
+        axi_read_burst(BURST8_BASE, 7, 3'b011, MID_ARID'(1));
+        $display("    8-beat: rd_ok=%0d  rd_fail=%0d",
+                 burst_rd_ok - (burst_rd_ok >= 4 ? 4 : burst_rd_ok),
+                 burst_rd_fail);
+
+        $display("  [8] Total burst rd_ok=%0d/12  rd_fail=%0d  wr_ok=%0d  wr_fail=%0d",
+                 burst_rd_ok, burst_rd_fail, burst_wr_ok, burst_wr_fail);
+
+        // ============================================================
+        // [9] Summary
         // ============================================================
         $display("\n--- Summary ---");
         $display("  Total ticks   : %0d", tick);
@@ -594,6 +749,8 @@ module test_ramulator #(
                  bp_wr_acc, B_DEPTH + 1, bp_wr_cmp, B_DEPTH + 1, bp_stall);
         $display("  [7] Simul     : rd acc=%0d/2  rd cmp=%0d/2  wr acc=%0d/1  wr cmp=%0d/1  func OK=%0d  FAIL=%0d",
                  sim_rd_acc, sim_rd_cmp, sim_wr_acc, sim_wr_cmp, sim_func_ok, sim_func_fail);
+        $display("  [8] Bursts    : rd_ok=%0d/12  rd_fail=%0d  wr_fail=%0d",
+                 burst_rd_ok, burst_rd_fail, burst_wr_fail);
 
         if (wr_acc    == NUM_WR    && wr_cmp  == NUM_WR    &&
             rd_acc    == total_rd  && rd_cmp  == total_rd  &&
@@ -603,7 +760,9 @@ module test_ramulator #(
             bp_stall  >= BP_HOLD   &&
             sim_rd_acc == 2        && sim_rd_cmp == 2       &&
             sim_wr_acc == 1        && sim_wr_cmp == 1       &&
-            sim_func_fail == 0)
+            sim_func_fail == 0     &&
+            burst_rd_ok == 12      && burst_rd_fail == 0    &&
+            burst_wr_fail == 0)
         begin
             $display("\n=== PASSED ===");
             ramulator_exit(0);

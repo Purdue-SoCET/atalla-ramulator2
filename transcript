@@ -1,5 +1,5 @@
 # vsim -c -voptargs="+acc" -sv_lib ./libramulator_dpi work.test_ramulator -do "run -all" -GCFG=./configs/ddr4_config.yaml 
-# Start time: 14:43:40 on Mar 14,2026
+# Start time: 04:54:11 on Mar 23,2026
 # ** Note: (vsim-3812) Design is being optimized...
 # //  Questa Sim-64
 # //  Version 2021.4 linux_x86_64 Oct 13 2021
@@ -100,14 +100,23 @@
 #     AR and AW accepted in same cycle (tick=1737).
 #     Simul-read  OK : got=0x0000000000400000
 #     Read-back   OK : got=0xfeedfacecafebabe
+# [8] Multi-beat INCR bursts ...
+#   [8a] 4-beat write burst at 0x00500000 (len=3, size=3)
+#   [8b] 4-beat read burst  at 0x00500000
+#     4-beat: rd_ok=4  rd_fail=0
+#   [8c] 8-beat write burst at 0x00600000 (len=7, size=3)
+#   [8d] 8-beat read burst  at 0x00600000
+#     8-beat: rd_ok=8  rd_fail=0
+#   [8] Total burst rd_ok=12/12  rd_fail=0  wr_ok=0  wr_fail=0
 # 
 # --- Summary ---
-#   Total ticks   : 1855
+#   Total ticks   : 1887
 #   [2] Writes    : acc=16/16  B-acks=16/16  lat(min/max/avg)=2/2/2
 #   [3-4] Reads   : acc=24/24  R-data=24/24  lat(min/max/avg)=23/206/40
 #   [3-4] Functional: OK=24/24  FAIL=0
 #   [5] RD flood  : ARs acc=48/48  R drained=48/48  max_stall=25 cycles
 #   [6] WR BP     : writes acc=5/5  B-acks=5/5  stall=20 cycles
 #   [7] Simul     : rd acc=2/2  rd cmp=2/2  wr acc=1/1  wr cmp=1/1  func OK=2  FAIL=0
+#   [8] Bursts    : rd_ok=12/12  rd_fail=0  wr_fail=0
 # 
 # === PASSED ===
