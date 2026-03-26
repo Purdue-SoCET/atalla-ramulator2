@@ -13,7 +13,9 @@
 //                            accepted; check R data; read-back written addr
 //   [8] Multi-beat INCR bursts — 4-beat and 8-beat write+read bursts;
 //                            verify per-beat data and last flag
-//   [9] Pass/fail summary
+//   [9] Multiple outstanding reads — issue NUM_PIPE ARs with r_i_ready=0,
+//                            verify SR FIFO buffers all responses; drain and check
+//   [10] Pass/fail summary
 
 `timescale 1ns / 1ps
 
@@ -45,7 +47,9 @@ module test_ramulator #(
     localparam longint SIMUL_BASE   = 64'h0040_0000;
     localparam longint BURST4_BASE  = 64'h0050_0000;  // [8] 4-beat burst test
     localparam longint BURST8_BASE  = 64'h0060_0000;  // [8] 8-beat burst test
+    localparam longint PIPE_BASE    = 64'h0070_0000;  // [9] SR FIFO pipeline test
     localparam longint STRIDE       = 64;
+    localparam int     NUM_PIPE     = 16;              // [9] must be <= SR_DEPTH
 
     // ----------------------------------------------------------------
     // Clock / reset
@@ -103,6 +107,9 @@ module test_ramulator #(
     // Scoreboard — [8] multi-beat INCR bursts
     int     burst_wr_ok = 0, burst_wr_fail = 0;
     int     burst_rd_ok = 0, burst_rd_fail = 0;
+
+    // Scoreboard — [9] SR FIFO pipeline test
+    int     pipe_acc = 0, pipe_cmp = 0, pipe_ok = 0, pipe_fail = 0;
 
     // ----------------------------------------------------------------
     // Task: full AXI write (issue AW+W, wait for aw_o_ready, collect B)
@@ -731,7 +738,65 @@ module test_ramulator #(
                  burst_rd_ok, burst_rd_fail, burst_wr_ok, burst_wr_fail);
 
         // ============================================================
-        // [9] Summary
+        // [9] Multiple outstanding reads (SR FIFO pipeline test)
+        //
+        // Issue NUM_PIPE single-beat ARs back-to-back while keeping
+        // r_i_ready=0.  Ramulator queues all requests simultaneously;
+        // completions accumulate in the SR FIFO (SR_DEPTH=16 entries).
+        // In Phase B, r_i_ready=1 drains all responses; each returned
+        // data value must equal the corresponding request address
+        // (unwritten region — functional model default).
+        // ============================================================
+        $display("[9] Multiple outstanding reads: %0d ARs pipelined (r_i_ready=0) ...", NUM_PIPE);
+        begin
+            // --- Phase A: issue all ARs back-to-back, r_i_ready=0 ---
+            axi.r_i_ready = 1'b0;
+            for (int i = 0; i < NUM_PIPE; i++) begin
+                longint paddr;
+                paddr = PIPE_BASE + longint'(i) * STRIDE;
+
+                axi.ar_o_valid  = 1'b1;
+                axi.ar_o.addr   = ARADDR'(paddr);
+                axi.ar_o.mid_id = MID_ARID'(i % (1 << MID_ARID));
+                axi.ar_o.size   = 3'b011;
+                axi.ar_o.len    = 4'h0;
+                axi.ar_o.burst  = 2'b01;
+
+                @(posedge clk); #1;
+                while (!axi.ar_o_ready) begin @(posedge clk); #1; end
+                axi.ar_o_valid = 1'b0;
+                pipe_acc++;
+            end
+            $display("    All %0d ARs accepted. Draining SR FIFO ...", pipe_acc);
+
+            // --- Phase B: drain all responses, verify data = addr ---
+            axi.r_i_ready = 1'b1;
+            for (int i = 0; i < NUM_PIPE; i++) begin
+                longint got_d;
+                while (!axi.r_i_valid) begin @(posedge clk); #1; end
+                got_d = longint'(axi.r_i.data);
+                @(posedge clk); #1;
+                pipe_cmp++;
+                // Unwritten region: wrapper returns addr as data.
+                // Responses may arrive out-of-order; verify got_d is
+                // one of the valid PIPE_BASE addresses.
+                if (got_d >= PIPE_BASE &&
+                    got_d < PIPE_BASE + longint'(NUM_PIPE) * STRIDE &&
+                    ((got_d - PIPE_BASE) % STRIDE) == 0) begin
+                    pipe_ok++;
+                    $display("    pipe R[%0d] data=0x%016h OK", i, got_d);
+                end else begin
+                    pipe_fail++;
+                    $display("    pipe R[%0d] data=0x%016h MISMATCH (not in expected set)", i, got_d);
+                end
+            end
+            axi.r_i_ready = 1'b0;
+            $display("    Pipeline: acc=%0d  cmp=%0d  OK=%0d  FAIL=%0d",
+                     pipe_acc, pipe_cmp, pipe_ok, pipe_fail);
+        end
+
+        // ============================================================
+        // [10] Summary
         // ============================================================
         $display("\n--- Summary ---");
         $display("  Total ticks   : %0d", tick);
@@ -751,6 +816,8 @@ module test_ramulator #(
                  sim_rd_acc, sim_rd_cmp, sim_wr_acc, sim_wr_cmp, sim_func_ok, sim_func_fail);
         $display("  [8] Bursts    : rd_ok=%0d/12  rd_fail=%0d  wr_fail=%0d",
                  burst_rd_ok, burst_rd_fail, burst_wr_fail);
+        $display("  [9] SR FIFO   : acc=%0d/%0d  cmp=%0d/%0d  OK=%0d  FAIL=%0d",
+                 pipe_acc, NUM_PIPE, pipe_cmp, NUM_PIPE, pipe_ok, pipe_fail);
 
         if (wr_acc    == NUM_WR    && wr_cmp  == NUM_WR    &&
             rd_acc    == total_rd  && rd_cmp  == total_rd  &&
@@ -762,7 +829,9 @@ module test_ramulator #(
             sim_wr_acc == 1        && sim_wr_cmp == 1       &&
             sim_func_fail == 0     &&
             burst_rd_ok == 12      && burst_rd_fail == 0    &&
-            burst_wr_fail == 0)
+            burst_wr_fail == 0     &&
+            pipe_acc == NUM_PIPE   && pipe_cmp == NUM_PIPE  &&
+            pipe_ok == NUM_PIPE    && pipe_fail == 0)
         begin
             $display("\n=== PASSED ===");
             ramulator_exit(0);

@@ -11,10 +11,12 @@
 //
 // Read path — two modes, selected by AR.len:
 //
-//   Single-beat (len == 0): original pipelined path.  Multiple ARs may be
-//     outstanding in Ramulator simultaneously; responses are forwarded to the
-//     R channel one at a time via r_pending.  check_response is gated by
-//     r-slot availability so the completion queue drains naturally.
+//   Single-beat (len == 0): multiple ARs may be outstanding in Ramulator
+//     simultaneously.  Completions are stored in a SR_DEPTH-entry R response
+//     FIFO (sr_fifo).  check_response is called each cycle while the FIFO has
+//     space, so responses accumulate without requiring the master to drain
+//     immediately.  r_i_valid reflects FIFO occupancy; r_i presents the head
+//     entry.
 //
 //   Multi-beat INCR burst (len > 0): ar_active serialises bursts (one at a
 //     time).  All len+1 Ramulator sub-requests are issued as fast as
@@ -37,7 +39,8 @@
 
 module ramulator_sv_wrapper #(
     parameter string CONFIG_FILE = "ramulator_config.yaml",
-    parameter int    B_DEPTH     = 4        // B-response FIFO depth
+    parameter int    B_DEPTH     = 4,       // B-response FIFO depth
+    parameter int    SR_DEPTH    = 16       // single-beat R-response FIFO depth
 )(
     axi_bus_if  axi,
     output logic init_done
@@ -82,9 +85,19 @@ module ramulator_sv_wrapper #(
     longint dpi_resp;
     longint dpi_data_out;
 
-    // R channel register (one beat presented on the AXI R channel at a time)
+    // R channel register — used by burst path to drive ordered beats from ROB.
+    // Single-beat responses bypass r_reg and go directly to sr_fifo.
     logic           r_pending;
     sub_r_channel_t r_reg;
+
+    // Single-beat R response FIFO — buffers completions from Ramulator so
+    // that multiple outstanding single-beat reads can complete without waiting
+    // for the master to drain each one before the next is accepted.
+    sub_r_channel_t sr_fifo [SR_DEPTH];
+    int             sr_cnt;      // entries currently in sr_fifo
+    int             sr_rd;       // read  pointer
+    int             sr_wr;       // write pointer
+    int             sr_cnt_next; // blocking accumulator (like b_cnt_next)
 
     // B-response FIFO
     sub_b_channel_t b_fifo [B_DEPTH];
@@ -120,8 +133,10 @@ module ramulator_sv_wrapper #(
     // ----------------------------------------------------------------
     // Combinatorial outputs
     // ----------------------------------------------------------------
-    assign axi.r_i_valid = r_pending;
-    assign axi.r_i       = r_reg;
+    // Burst path drives r_reg/r_pending; single-beat path drives sr_fifo.
+    // Burst takes priority so burst beats are never interleaved with FIFO drain.
+    assign axi.r_i_valid = r_pending || (sr_cnt > 0);
+    assign axi.r_i       = r_pending ? r_reg : sr_fifo[sr_rd];
     assign axi.b_i_valid = (b_cnt > 0);
     assign axi.b_i       = b_fifo[b_rd];
 
@@ -138,6 +153,9 @@ module ramulator_sv_wrapper #(
         ar_active    = 1'b0;
         ar_rob_valid = '0;
         aw_active    = 1'b0;
+        sr_cnt       = 0;
+        sr_rd        = 0;
+        sr_wr        = 0;
 
         wait (axi.nRST === 1'b0);
         wait (axi.nRST === 1'b1);
@@ -166,16 +184,17 @@ module ramulator_sv_wrapper #(
     // Clocked logic
     //
     // Each cycle (in order):
-    //   1.  check_response → either ROB (burst active) or r_reg (single-beat)
+    //   0.  Drain SR FIFO head → R channel  (blocking sr_cnt_next; single-beat)
+    //   1.  check_response → ROB (burst) or sr_fifo (single-beat, if space)
     //   1b. Drive R channel in burst order from ROB  [burst path only]
     //   2.  Issue next burst beat to Ramulator        [burst path only]
     //   3.  Accept AR:
-    //         len == 0 → single-beat path (read_mid_id, no ar_active)
+    //         len == 0 → single-beat path (read_mid_id; sr_fifo buffers response)
     //         len  > 0 → burst path (ar_active, ROB)
     //   4.  Drain B FIFO head (blocking b_cnt_next)
     //   5a. Accept W beat for ongoing write burst  OR
     //   5b. Accept AW+W[0] to start write burst
-    //   6.  Commit b_cnt
+    //   6.  Commit b_cnt, sr_cnt
     //   7.  Advance Ramulator clock
     // ----------------------------------------------------------------
     always @(posedge axi.CLK or negedge axi.nRST) begin
@@ -191,6 +210,9 @@ module ramulator_sv_wrapper #(
             ar_active      <= 1'b0;
             ar_rob_valid   <= '0;
             aw_active      <= 1'b0;
+            sr_cnt         <= 0;
+            sr_rd          <= 0;
+            sr_wr          <= 0;
 
         end else if (init_done) begin
 
@@ -200,17 +222,32 @@ module ramulator_sv_wrapper #(
             axi.w_o_ready  <= 1'b0;
 
             // ----------------------------------------------------------
+            // 0. Initialise sr_cnt_next; drain SR FIFO head and clear
+            //    r_pending when the master consumes a beat.
+            // ----------------------------------------------------------
+            sr_cnt_next = sr_cnt;
+
+            // Clear r_pending when the last burst beat is consumed by master.
+            if (!ar_active && r_pending && axi.r_i_ready)
+                r_pending <= 1'b0;
+
+            // Advance SR FIFO read pointer when master consumes the head.
+            if (!r_pending && sr_cnt_next > 0 && axi.r_i_ready) begin
+                sr_rd       <= (sr_rd + 1 == SR_DEPTH) ? 0 : sr_rd + 1;
+                sr_cnt_next  = sr_cnt_next - 1;
+            end
+
+            // ----------------------------------------------------------
             // 1. Drain one Ramulator response.
             //
             //    Burst path  (ar_active): called unconditionally so the
             //      completion queue keeps draining under R backpressure.
             //      Response is stored in the reorder buffer.
             //
-            //    Single-beat path (!ar_active): gated on r-slot availability
-            //      (same as original design).  Response is written directly
-            //      to r_reg.
+            //    Single-beat path (!ar_active): gated on SR FIFO space.
+            //      Response is pushed into sr_fifo.
             // ----------------------------------------------------------
-            if (ar_active || !r_pending || axi.r_i_ready) begin
+            if (ar_active || sr_cnt_next < SR_DEPTH) begin
                 dpi_resp = ramulator_check_response(handle, dpi_data_out);
                 if (dpi_resp !== -64'sd1) begin
                     if (ar_active) begin
@@ -220,17 +257,14 @@ module ramulator_sv_wrapper #(
                         ar_rob[beat_idx]       <= dpi_data_out;
                         ar_rob_valid[beat_idx] <= 1'b1;
                     end else begin
-                        // Single-beat: forward directly to R channel register
-                        r_reg.data <= dpi_data_out[RDATA-1:0];
-                        r_reg.id   <= read_mid_id[dpi_resp][RID-1:0];
-                        r_reg.last <= 1'b1;
-                        r_reg.resp <= R_OKAY;
-                        r_pending  <= 1'b1;
+                        // Single-beat: push response into SR FIFO
+                        sr_fifo[sr_wr].data <= dpi_data_out[RDATA-1:0];
+                        sr_fifo[sr_wr].id   <= read_mid_id[dpi_resp][RID-1:0];
+                        sr_fifo[sr_wr].last <= 1'b1;
+                        sr_fifo[sr_wr].resp <= R_OKAY;
+                        sr_wr               <= (sr_wr + 1 == SR_DEPTH) ? 0 : sr_wr + 1;
+                        sr_cnt_next          = sr_cnt_next + 1;
                     end
-                end else begin
-                    // No response this cycle; clear r_pending if consumed
-                    if (!ar_active && r_pending && axi.r_i_ready)
-                        r_pending <= 1'b0;
                 end
             end
 
@@ -376,9 +410,10 @@ module ramulator_sv_wrapper #(
             end
 
             // ----------------------------------------------------------
-            // 6. Commit final B FIFO count
+            // 6. Commit final B FIFO and SR FIFO counts
             // ----------------------------------------------------------
-            b_cnt <= b_cnt_next;
+            b_cnt  <= b_cnt_next;
+            sr_cnt <= sr_cnt_next;
 
             // ----------------------------------------------------------
             // 7. Advance Ramulator by one cycle
