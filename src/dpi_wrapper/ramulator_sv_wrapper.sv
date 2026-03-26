@@ -18,14 +18,16 @@
 //     immediately.  r_i_valid reflects FIFO occupancy; r_i presents the head
 //     entry.
 //
-//   Multi-beat INCR burst (len > 0): ar_active serialises bursts (one at a
-//     time).  All len+1 Ramulator sub-requests are issued as fast as
-//     Ramulator accepts them (one per cycle).  Responses are stored in a
-//     16-entry reorder buffer and driven on R in order with correct last flag.
-//     check_response is called unconditionally while ar_active so backpressure
-//     on r_i_ready does not stall the completion queue.
+//   Multi-beat burst (len > 0, burst = FIXED/INCR/WRAP): ar_active serialises
+//     bursts (one at a time).  All len+1 Ramulator sub-requests are issued as
+//     fast as Ramulator accepts them (one per cycle).  Responses are stored in
+//     a 16-entry reorder buffer and driven on R in order with correct last flag.
+//     FIXED: all beats use base_addr; ROB slots assigned by arrival order.
+//     INCR:  beat i → base_addr + i*size_bytes.
+//     WRAP:  address increments and wraps at the (len+1)*size_bytes aligned
+//            boundary; beat index recovered from response address by inverse.
 //
-// Write path — supports INCR bursts (len > 0):
+// Write path — supports FIXED/INCR/WRAP bursts (len > 0):
 //   AW+W[0] must arrive in the same cycle to start a write burst.  Subsequent
 //   W beats are accepted one per cycle as they arrive.  One B response is
 //   issued after the last W beat.  B responses are buffered in a small FIFO
@@ -121,6 +123,8 @@ module ramulator_sv_wrapper #(
     int                  ar_beat_out;     // next beat index to output on R channel
     longint              ar_rob [16];     // reorder buffer (max 16 beats, ARLEN=4)
     logic [15:0]         ar_rob_valid;    // valid flags for ROB slots
+    logic [ARBURST-1:0]  ar_burst_reg;    // burst type for active read burst
+    int                  ar_fixed_cnt;    // ROB slot counter for FIXED read bursts
 
     // --- Write burst state ---
     logic                aw_active;       // multi-beat W burst in progress
@@ -128,6 +132,7 @@ module ramulator_sv_wrapper #(
     logic [AWLEN-1:0]    aw_len_reg;
     logic [AWSIZE-1:0]   aw_size_reg;
     logic [MID_AWID-1:0] aw_id_reg;
+    logic [AWBURST-1:0]  aw_burst_reg;    // burst type for active write burst
     int                  aw_beat;         // next W beat index (beat 0 already sent)
 
     // --- WSTRB byte-masking shadow memory ---
@@ -162,6 +167,64 @@ module ramulator_sv_wrapper #(
     endfunction
 
     // ----------------------------------------------------------------
+    // Burst address helpers
+    //
+    // burst_beat_addr — returns the DRAM address for beat `beat` of a burst.
+    //   FIXED : every beat reuses base_addr (e.g. FIFO-mapped registers).
+    //   INCR  : beat i → base_addr + i * size_bytes.
+    //   WRAP  : increments and wraps at the (len+1)*size_bytes aligned boundary.
+    //
+    // burst_beat_idx — inverse: given a Ramulator response address, returns the
+    //   ROB slot it should fill.  For FIXED bursts Ramulator always returns the
+    //   same address, so slots are assigned in arrival order via fixed_cnt.
+    // ----------------------------------------------------------------
+    function automatic longint burst_beat_addr(
+        input longint             base_addr,
+        input int                 beat,
+        input logic [ARSIZE-1:0]  size,
+        input logic [ARLEN-1:0]   len,
+        input logic [ARBURST-1:0] burst
+    );
+        longint size_bytes, wrap_len, wrap_mask, aligned;
+        size_bytes = longint'(1 << int'(size));
+        case (burst)
+            2'b00:   return base_addr;                                       // FIXED
+            2'b10: begin                                                     // WRAP
+                wrap_len  = longint'(int'(len) + 1) * size_bytes;
+                wrap_mask = wrap_len - 1;
+                aligned   = base_addr & ~wrap_mask;
+                return aligned + ((base_addr - aligned
+                                   + longint'(beat) * size_bytes) & wrap_mask);
+            end
+            default: return base_addr + longint'(beat) * size_bytes;        // INCR
+        endcase
+    endfunction
+
+    function automatic int burst_beat_idx(
+        input longint             resp_addr,
+        input longint             base_addr,
+        input logic [ARSIZE-1:0]  size,
+        input logic [ARLEN-1:0]   len,
+        input logic [ARBURST-1:0] burst,
+        input int                 fixed_cnt
+    );
+        longint size_bytes, wrap_len, wrap_mask, aligned, start_off;
+        size_bytes = longint'(1 << int'(size));
+        case (burst)
+            2'b00:   return fixed_cnt;                                       // FIXED
+            2'b10: begin                                                     // WRAP
+                wrap_len  = longint'(int'(len) + 1) * size_bytes;
+                wrap_mask = wrap_len - 1;
+                aligned   = base_addr & ~wrap_mask;
+                start_off = base_addr & wrap_mask;
+                return int'(((resp_addr - aligned - start_off + wrap_len)
+                             & wrap_mask) / size_bytes);
+            end
+            default: return int'((resp_addr - base_addr) / size_bytes);     // INCR
+        endcase
+    endfunction
+
+    // ----------------------------------------------------------------
     // Combinatorial outputs
     // ----------------------------------------------------------------
     // Burst path drives r_reg/r_pending; single-beat path drives sr_fifo.
@@ -183,7 +246,10 @@ module ramulator_sv_wrapper #(
         b_wr         = 0;
         ar_active    = 1'b0;
         ar_rob_valid = '0;
+        ar_burst_reg = 2'b01;
+        ar_fixed_cnt = 0;
         aw_active    = 1'b0;
+        aw_burst_reg = 2'b01;
         sr_cnt       = 0;
         sr_rd        = 0;
         sr_wr        = 0;
@@ -240,7 +306,10 @@ module ramulator_sv_wrapper #(
             b_wr           <= 0;
             ar_active      <= 1'b0;
             ar_rob_valid   <= '0;
+            ar_burst_reg   <= 2'b01;
+            ar_fixed_cnt   <= 0;
             aw_active      <= 1'b0;
+            aw_burst_reg   <= 2'b01;
             sr_cnt         <= 0;
             sr_rd          <= 0;
             sr_wr          <= 0;
@@ -282,11 +351,16 @@ module ramulator_sv_wrapper #(
                 dpi_resp = ramulator_check_response(handle, dpi_data_out);
                 if (dpi_resp !== -64'sd1) begin
                     if (ar_active) begin
-                        // Route to reorder buffer; step 1b outputs in order
-                        beat_idx = int'((dpi_resp - ar_base_addr)
-                                        >> int'(ar_size_reg));
+                        // Route to reorder buffer; step 1b outputs in order.
+                        // burst_beat_idx handles FIXED (arrival-order counter),
+                        // WRAP (inverse wrap formula), and INCR (address diff).
+                        beat_idx = burst_beat_idx(dpi_resp, ar_base_addr,
+                                                  ar_size_reg, ar_len_reg,
+                                                  ar_burst_reg, ar_fixed_cnt);
                         ar_rob[beat_idx]       <= dpi_data_out;
                         ar_rob_valid[beat_idx] <= 1'b1;
+                        if (ar_burst_reg == 2'b00)
+                            ar_fixed_cnt <= ar_fixed_cnt + 1;
                     end else begin
                         // Single-beat: push response into SR FIFO
                         sr_fifo[sr_wr].data <= dpi_data_out[RDATA-1:0];
@@ -331,8 +405,8 @@ module ramulator_sv_wrapper #(
             if (ar_active && ar_beat_issued <= int'(ar_len_reg)) begin
                 dpi_accepted = ramulator_send_request(
                     handle,
-                    ar_base_addr + longint'(ar_beat_issued)
-                                 * longint'(1 << int'(ar_size_reg)),
+                    burst_beat_addr(ar_base_addr, ar_beat_issued,
+                                    ar_size_reg, ar_len_reg, ar_burst_reg),
                     0,                      // Read
                     int'(ar_id_reg),
                     0
@@ -365,9 +439,11 @@ module ramulator_sv_wrapper #(
                         ar_len_reg     <= axi.ar_o.len;
                         ar_size_reg    <= axi.ar_o.size;
                         ar_id_reg      <= axi.ar_o.mid_id;
+                        ar_burst_reg   <= axi.ar_o.burst;
                         ar_beat_issued <= 1;
                         ar_beat_out    <= 0;
                         ar_rob_valid   <= '0;
+                        ar_fixed_cnt   <= 0;
                         ar_active      <= 1'b1;
                     end
                 end
@@ -390,8 +466,8 @@ module ramulator_sv_wrapper #(
             //     forwarding to Ramulator.
             // ----------------------------------------------------------
             if (aw_active && axi.w_o_valid) begin
-                wr_beat_addr = aw_base_addr + longint'(aw_beat)
-                                            * longint'(1 << int'(aw_size_reg));
+                wr_beat_addr = burst_beat_addr(aw_base_addr, aw_beat,
+                                               aw_size_reg, aw_len_reg, aw_burst_reg);
                 wr_existing  = wr_shadow.exists(wr_beat_addr) ? wr_shadow[wr_beat_addr] : '0;
                 wr_merged    = apply_wstrb(wr_existing, axi.w_o.data, axi.w_o.strb);
                 dpi_accepted = ramulator_send_request(
@@ -446,6 +522,7 @@ module ramulator_sv_wrapper #(
                         aw_len_reg   <= axi.aw_o.len;
                         aw_size_reg  <= axi.aw_o.size;
                         aw_id_reg    <= axi.aw_o.mid_id;
+                        aw_burst_reg <= axi.aw_o.burst;
                         aw_beat      <= 1;
                         aw_active    <= 1'b1;
                     end

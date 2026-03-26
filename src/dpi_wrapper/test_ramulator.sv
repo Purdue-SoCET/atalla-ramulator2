@@ -13,10 +13,12 @@
 //                            accepted; check R data; read-back written addr
 //   [8] Multi-beat INCR bursts — 4-beat and 8-beat write+read bursts;
 //                            verify per-beat data and last flag
-//   [9] Multiple outstanding reads — issue NUM_PIPE ARs with r_i_ready=0,
+//   [9] FIXED burst — 4-beat write+read to same address; last beat wins
+//   [10] WRAP burst  — 4-beat write+read starting mid-region; address wraps
+//   [11] Multiple outstanding reads — issue NUM_PIPE ARs with r_i_ready=0,
 //                            verify SR FIFO buffers all responses; drain and check
-//   [10] WSTRB byte masking — lower-half, upper-half, zero, single-byte strobes
-//   [11] Pass/fail summary
+//   [12] WSTRB byte masking — lower-half, upper-half, zero, single-byte strobes
+//   [13] Pass/fail summary
 
 `timescale 1ns / 1ps
 
@@ -50,6 +52,8 @@ module test_ramulator #(
     localparam longint BURST8_BASE  = 64'h0060_0000;  // [8] 8-beat burst test
     localparam longint PIPE_BASE    = 64'h0070_0000;  // [9] SR FIFO pipeline test
     localparam longint STRB_BASE    = 64'h0080_0000;  // [10] WSTRB byte-mask test
+    localparam longint FIXED_BASE   = 64'h0090_0000;  // [11] FIXED burst test
+    localparam longint WRAP_BASE    = 64'h00A0_0000;  // [12] WRAP burst test
     localparam longint STRIDE       = 64;
     localparam int     NUM_PIPE     = 16;              // [9] must be <= SR_DEPTH
 
@@ -115,6 +119,12 @@ module test_ramulator #(
 
     // Scoreboard — [10] WSTRB byte-masking test
     int     strb_ok = 0, strb_fail = 0;
+
+    // Scoreboard — [11] FIXED burst test
+    int     fixed_ok = 0, fixed_fail = 0;
+
+    // Scoreboard — [12] WRAP burst test
+    int     wrap_ok = 0, wrap_fail = 0;
 
     // ----------------------------------------------------------------
     // Task: full AXI write (issue AW+W, wait for aw_o_ready, collect B)
@@ -449,6 +459,143 @@ module test_ramulator #(
         got_data = longint'(axi.r_i.data);
         @(posedge clk); #1;
         axi.r_i_ready = 1'b0;
+    endtask
+
+    // ----------------------------------------------------------------
+    // Task: write burst with explicit burst type (FIXED=0/INCR=1/WRAP=2).
+    //   Drives AW.burst correctly; updates shadow at the per-burst-type
+    //   address for each beat so read-back tasks see the right expected value.
+    //   Beat i data = base_data + i.
+    // ----------------------------------------------------------------
+    task automatic axi_write_burst_typed(
+        input  longint              base_addr,
+        input  longint              base_data,
+        input  int                  len,
+        input  logic [2:0]          size,
+        input  logic [1:0]          burst,
+        input  logic [MID_AWID-1:0] mid_id
+    );
+        int     stride, num_beats;
+        longint beat_addr, wlen, wmask, aln;
+        stride    = 1 << int'(size);
+        num_beats = len + 1;
+
+        axi.aw_o_valid  = 1'b1;
+        axi.aw_o.addr   = AWADDR'(base_addr);
+        axi.aw_o.mid_id = mid_id;
+        axi.aw_o.size   = size;
+        axi.aw_o.len    = AWLEN'(len);
+        axi.aw_o.burst  = burst;
+
+        axi.w_o_valid   = 1'b1;
+        axi.w_o.data    = WDATA'(base_data);
+        axi.w_o.mid_id  = MID_ARID'(mid_id);
+        axi.w_o.last    = (len == 0) ? 1'b1 : 1'b0;
+        axi.w_o.strb    = '1;
+
+        @(posedge clk); #1;
+        while (!axi.aw_o_ready) begin @(posedge clk); #1; end
+        axi.aw_o_valid  = 1'b0;
+        shadow[base_addr] = base_data;   // beat 0 always at base_addr
+
+        for (int i = 1; i <= len; i++) begin
+            longint bdata;
+            bdata = base_data + longint'(i);
+            case (burst)
+                2'b00: beat_addr = base_addr;  // FIXED: same address every beat
+                2'b10: begin  // WRAP
+                    wlen      = longint'(num_beats) * longint'(stride);
+                    wmask     = wlen - 1;
+                    aln       = base_addr & ~wmask;
+                    beat_addr = aln + ((base_addr - aln
+                                        + longint'(i) * longint'(stride)) & wmask);
+                end
+                default: beat_addr = base_addr + longint'(i) * longint'(stride);
+            endcase
+            axi.w_o.data  = WDATA'(bdata);
+            axi.w_o.last  = (i == len) ? 1'b1 : 1'b0;
+            axi.w_o_valid = 1'b1;
+            @(posedge clk); #1;
+            while (!axi.w_o_ready) begin @(posedge clk); #1; end
+            shadow[beat_addr] = bdata;
+        end
+        axi.w_o_valid = 1'b0;
+
+        axi.b_i_ready = 1'b1;
+        while (!axi.b_i_valid) begin @(posedge clk); #1; end
+        @(posedge clk); #1;
+        axi.b_i_ready = 1'b0;
+    endtask
+
+    // ----------------------------------------------------------------
+    // Task: read burst with explicit burst type (FIXED=0/INCR=1/WRAP=2).
+    //   Issues AR with the given burst type; collects len+1 R beats;
+    //   verifies each beat's data against shadow at the burst-correct
+    //   address and checks the last flag.
+    //   ok_cnt / fail_cnt updated per beat (passed by ref).
+    // ----------------------------------------------------------------
+    task automatic axi_read_burst_typed(
+        input  longint              base_addr,
+        input  int                  len,
+        input  logic [2:0]          size,
+        input  logic [1:0]          burst,
+        input  logic [MID_ARID-1:0] mid_id,
+        ref    int                  ok_cnt,
+        ref    int                  fail_cnt
+    );
+        int     stride, num_beats;
+        longint beat_addr, got, exp, wlen, wmask, aln;
+        logic   got_last;
+        stride    = 1 << int'(size);
+        num_beats = len + 1;
+
+        axi.ar_o_valid  = 1'b1;
+        axi.ar_o.addr   = ARADDR'(base_addr);
+        axi.ar_o.mid_id = mid_id;
+        axi.ar_o.size   = size;
+        axi.ar_o.len    = ARLEN'(len);
+        axi.ar_o.burst  = burst;
+
+        @(posedge clk); #1;
+        while (!axi.ar_o_ready) begin @(posedge clk); #1; end
+        axi.ar_o_valid = 1'b0;
+
+        for (int i = 0; i <= len; i++) begin
+            case (burst)
+                2'b00: beat_addr = base_addr;  // FIXED
+                2'b10: begin  // WRAP
+                    wlen      = longint'(num_beats) * longint'(stride);
+                    wmask     = wlen - 1;
+                    aln       = base_addr & ~wmask;
+                    beat_addr = aln + ((base_addr - aln
+                                        + longint'(i) * longint'(stride)) & wmask);
+                end
+                default: beat_addr = base_addr + longint'(i) * longint'(stride);
+            endcase
+
+            axi.r_i_ready = 1'b1;
+            while (!axi.r_i_valid) begin @(posedge clk); #1; end
+            got      = longint'(axi.r_i.data);
+            got_last = axi.r_i.last;
+            @(posedge clk); #1;
+            axi.r_i_ready = 1'b0;
+
+            exp = shadow.exists(beat_addr) ? shadow[beat_addr] : beat_addr;
+            if (got === exp) ok_cnt++;
+            else begin
+                $display("  [BURST RD MISMATCH] burst=%0d beat=%0d addr=0x%08h got=0x%016h exp=0x%016h",
+                         burst, i, beat_addr, got, exp);
+                fail_cnt++;
+            end
+
+            if ((i == len) && !got_last) begin
+                $display("  [BURST RD ERROR] beat=%0d: expected last=1 got last=0", i);
+                fail_cnt++;
+            end else if ((i < len) && got_last) begin
+                $display("  [BURST RD ERROR] beat=%0d: expected last=0 got last=1", i);
+                fail_cnt++;
+            end
+        end
     endtask
 
     // ----------------------------------------------------------------
@@ -805,7 +952,72 @@ module test_ramulator #(
                  burst_rd_ok, burst_rd_fail, burst_wr_ok, burst_wr_fail);
 
         // ============================================================
-        // [9] Multiple outstanding reads (SR FIFO pipeline test)
+        // [9] FIXED burst
+        //
+        // All beats of a FIXED burst target the same address, so the last
+        // write wins.  A subsequent FIXED read returns that same value for
+        // every beat with the correct last flag.
+        //
+        // [9a] 4-beat FIXED write then 4-beat FIXED read.
+        //   Beats 0-3 written: base_data+0 .. base_data+3.
+        //   Shadow ends at base_data+3 (last write wins).
+        //   Each read beat expects shadow[base_addr] = base_data+3.
+        // ============================================================
+        $display("[9] FIXED burst ...");
+        begin
+            longint fixed_addr, fixed_base_data;
+            fixed_addr      = FIXED_BASE;
+            fixed_base_data = 64'hF1F1_0000_0000_0000;
+
+            $display("  [9a] 4-beat FIXED write at 0x%08h (all beats → same addr)", fixed_addr);
+            axi_write_burst_typed(fixed_addr, fixed_base_data, 3, 3'b011, 2'b00, MID_AWID'(0));
+            // shadow[fixed_addr] = fixed_base_data+3 = 0xF1F1_0000_0000_0003
+
+            $display("  [9a] 4-beat FIXED read  at 0x%08h (expect 0x%016h x4)",
+                     fixed_addr, shadow[fixed_addr]);
+            axi_read_burst_typed(fixed_addr, 3, 3'b011, 2'b00, MID_ARID'(0),
+                                 fixed_ok, fixed_fail);
+            $display("    FIXED: OK=%0d/4  FAIL=%0d", fixed_ok, fixed_fail);
+        end
+
+        // ============================================================
+        // [10] WRAP burst
+        //
+        // 4-beat WRAP (len=3, size=3 → 8 B/beat, wrap_len=32 B).
+        // Start address is WRAP_BASE+0x10 (offset 16 within the 32-byte
+        // aligned region starting at WRAP_BASE).
+        // Beat addresses:
+        //   beat 0 → WRAP_BASE+0x10  (base address as given)
+        //   beat 1 → WRAP_BASE+0x18
+        //   beat 2 → WRAP_BASE+0x00  (wrap!)
+        //   beat 3 → WRAP_BASE+0x08
+        //
+        // [10a] 4-beat WRAP write + read; verify data and last flag.
+        // ============================================================
+        $display("[10] WRAP burst ...");
+        begin
+            longint wrap_start, wrap_base_data;
+            // Start mid-region: offset 16 within a 32-byte (4*8) wrap boundary
+            wrap_start     = WRAP_BASE + 64'h10;
+            wrap_base_data = 64'hC0DE_0000_0000_0000;
+
+            $display("  [10a] 4-beat WRAP write at 0x%08h (wrap_len=32B, starts mid-region)",
+                     wrap_start);
+            axi_write_burst_typed(wrap_start, wrap_base_data, 3, 3'b011, 2'b10, MID_AWID'(1));
+            // Beat addresses (verified against burst_beat_addr formula):
+            //   0: WRAP_BASE+0x10  data=0xC0DE_...0000
+            //   1: WRAP_BASE+0x18  data=0xC0DE_...0001
+            //   2: WRAP_BASE+0x00  data=0xC0DE_...0002  (wrapped)
+            //   3: WRAP_BASE+0x08  data=0xC0DE_...0003
+
+            $display("  [10a] 4-beat WRAP read  at 0x%08h", wrap_start);
+            axi_read_burst_typed(wrap_start, 3, 3'b011, 2'b10, MID_ARID'(1),
+                                 wrap_ok, wrap_fail);
+            $display("    WRAP:  OK=%0d/4  FAIL=%0d", wrap_ok, wrap_fail);
+        end
+
+        // ============================================================
+        // [11] Multiple outstanding reads (SR FIFO pipeline test)
         //
         // Issue NUM_PIPE single-beat ARs back-to-back while keeping
         // r_i_ready=0.  Ramulator queues all requests simultaneously;
@@ -814,7 +1026,7 @@ module test_ramulator #(
         // data value must equal the corresponding request address
         // (unwritten region — functional model default).
         // ============================================================
-        $display("[9] Multiple outstanding reads: %0d ARs pipelined (r_i_ready=0) ...", NUM_PIPE);
+        $display("[11] Multiple outstanding reads: %0d ARs pipelined (r_i_ready=0) ...", NUM_PIPE);
         begin
             // --- Phase A: issue all ARs back-to-back, r_i_ready=0 ---
             axi.r_i_ready = 1'b0;
@@ -863,79 +1075,79 @@ module test_ramulator #(
         end
 
         // ============================================================
-        // [10] WSTRB byte masking
+        // [12] WSTRB byte masking
         //
         // All writes use axi_write_strb (explicit strobe) and reads use
         // axi_read_raw (does not touch global rd counters).
         // The wrapper maintains its own wr_shadow and merges bytes before
         // passing to Ramulator — no masking logic reaches Ramulator.
         //
-        // [10a] Lower-half strobe (0x0F): upper 4 B preserved from first write
-        // [10b] Upper-half strobe (0xF0): lower 4 B preserved from first write
-        // [10c] Zero strobe (0x00): entire word unchanged (no-op write)
-        // [10d] Single-byte strobe (0x01) to a fresh address: only byte 0 set
+        // [12a] Lower-half strobe (0x0F): upper 4 B preserved from first write
+        // [12b] Upper-half strobe (0xF0): lower 4 B preserved from first write
+        // [12c] Zero strobe (0x00): entire word unchanged (no-op write)
+        // [12d] Single-byte strobe (0x01) to a fresh address: only byte 0 set
         // ============================================================
-        $display("[10] WSTRB byte masking ...");
+        $display("[12] WSTRB byte masking ...");
         begin
             longint got, exp;
 
-            // [10a] Lower-half mask: establish full word, then update bytes 0-3 only
+            // [12a] Lower-half mask: establish full word, then update bytes 0-3 only
             axi_write_strb(STRB_BASE,          64'hDEADBEEF_12345678, 8'hFF, MID_AWID'(0));
             axi_write_strb(STRB_BASE,          64'hAAAAAAAA_BBBBBBBB, 8'h0F, MID_AWID'(0));
             exp = 64'hDEADBEEF_BBBBBBBB;  // bytes 4-7 from 1st write, bytes 0-3 from 2nd
             axi_read_raw(STRB_BASE, MID_ARID'(0), got);
             if (got === exp) begin
                 strb_ok++;
-                $display("  [10a] lower-half mask OK  got=0x%016h", got);
+                $display("  [12a] lower-half mask OK  got=0x%016h", got);
             end else begin
                 strb_fail++;
-                $display("  [10a] lower-half mask FAIL got=0x%016h exp=0x%016h", got, exp);
+                $display("  [12a] lower-half mask FAIL got=0x%016h exp=0x%016h", got, exp);
             end
 
-            // [10b] Upper-half mask: establish full word, then update bytes 4-7 only
+            // [12b] Upper-half mask: establish full word, then update bytes 4-7 only
             axi_write_strb(STRB_BASE+STRIDE,   64'h11111111_22222222, 8'hFF, MID_AWID'(0));
             axi_write_strb(STRB_BASE+STRIDE,   64'h99999999_00000000, 8'hF0, MID_AWID'(0));
             exp = 64'h99999999_22222222;  // bytes 4-7 from 2nd write, bytes 0-3 from 1st
             axi_read_raw(STRB_BASE+STRIDE, MID_ARID'(0), got);
             if (got === exp) begin
                 strb_ok++;
-                $display("  [10b] upper-half mask OK  got=0x%016h", got);
+                $display("  [12b] upper-half mask OK  got=0x%016h", got);
             end else begin
                 strb_fail++;
-                $display("  [10b] upper-half mask FAIL got=0x%016h exp=0x%016h", got, exp);
+                $display("  [12b] upper-half mask FAIL got=0x%016h exp=0x%016h", got, exp);
             end
 
-            // [10c] Zero strobe: write should be a complete no-op for data
+            // [12c] Zero strobe: write should be a complete no-op for data
             axi_write_strb(STRB_BASE+2*STRIDE, 64'h5A5A5A5A_5A5A5A5A, 8'hFF, MID_AWID'(0));
             axi_write_strb(STRB_BASE+2*STRIDE, 64'hFFFFFFFF_FFFFFFFF, 8'h00, MID_AWID'(0));
             exp = 64'h5A5A5A5A_5A5A5A5A;  // unchanged
             axi_read_raw(STRB_BASE+2*STRIDE, MID_ARID'(0), got);
             if (got === exp) begin
                 strb_ok++;
-                $display("  [10c] zero strobe OK      got=0x%016h", got);
+                $display("  [12c] zero strobe OK      got=0x%016h", got);
             end else begin
                 strb_fail++;
-                $display("  [10c] zero strobe FAIL    got=0x%016h exp=0x%016h", got, exp);
+                $display("  [12c] zero strobe FAIL    got=0x%016h exp=0x%016h", got, exp);
             end
 
-            // [10d] Single-byte strobe to fresh address (shadow defaults to 0)
+            // [12d] Single-byte strobe to fresh address (shadow defaults to 0)
             //   data=0xFEDCBA98_76543210, strb=0x01 → only byte 0 = 0x10
             axi_write_strb(STRB_BASE+3*STRIDE, 64'hFEDCBA98_76543210, 8'h01, MID_AWID'(0));
             exp = 64'h0000000000000010;
             axi_read_raw(STRB_BASE+3*STRIDE, MID_ARID'(0), got);
             if (got === exp) begin
                 strb_ok++;
-                $display("  [10d] single-byte OK      got=0x%016h", got);
+                $display("  [12d] single-byte OK      got=0x%016h", got);
             end else begin
                 strb_fail++;
-                $display("  [10d] single-byte FAIL    got=0x%016h exp=0x%016h", got, exp);
+                $display("  [12d] single-byte FAIL    got=0x%016h exp=0x%016h", got, exp);
             end
 
             $display("  WSTRB: OK=%0d/4  FAIL=%0d", strb_ok, strb_fail);
         end
 
         // ============================================================
-        // [11] Summary
+        // [13] Summary
         // ============================================================
         $display("\n--- Summary ---");
         $display("  Total ticks   : %0d", tick);
@@ -953,11 +1165,15 @@ module test_ramulator #(
                  bp_wr_acc, B_DEPTH + 1, bp_wr_cmp, B_DEPTH + 1, bp_stall);
         $display("  [7] Simul     : rd acc=%0d/2  rd cmp=%0d/2  wr acc=%0d/1  wr cmp=%0d/1  func OK=%0d  FAIL=%0d",
                  sim_rd_acc, sim_rd_cmp, sim_wr_acc, sim_wr_cmp, sim_func_ok, sim_func_fail);
-        $display("  [8] Bursts    : rd_ok=%0d/12  rd_fail=%0d  wr_fail=%0d",
+        $display("  [8]  INCR     : rd_ok=%0d/12  rd_fail=%0d  wr_fail=%0d",
                  burst_rd_ok, burst_rd_fail, burst_wr_fail);
-        $display("  [9] SR FIFO   : acc=%0d/%0d  cmp=%0d/%0d  OK=%0d  FAIL=%0d",
+        $display("  [9]  FIXED    : OK=%0d/4  FAIL=%0d",
+                 fixed_ok, fixed_fail);
+        $display("  [10] WRAP     : OK=%0d/4  FAIL=%0d",
+                 wrap_ok, wrap_fail);
+        $display("  [11] SR FIFO  : acc=%0d/%0d  cmp=%0d/%0d  OK=%0d  FAIL=%0d",
                  pipe_acc, NUM_PIPE, pipe_cmp, NUM_PIPE, pipe_ok, pipe_fail);
-        $display("  [10] WSTRB    : OK=%0d/4  FAIL=%0d",
+        $display("  [12] WSTRB    : OK=%0d/4  FAIL=%0d",
                  strb_ok, strb_fail);
 
         if (wr_acc    == NUM_WR    && wr_cmp  == NUM_WR    &&
@@ -973,7 +1189,9 @@ module test_ramulator #(
             burst_wr_fail == 0     &&
             pipe_acc == NUM_PIPE   && pipe_cmp == NUM_PIPE  &&
             pipe_ok == NUM_PIPE    && pipe_fail == 0        &&
-            strb_ok == 4           && strb_fail == 0)
+            strb_ok == 4           && strb_fail == 0        &&
+            fixed_ok == 4          && fixed_fail == 0       &&
+            wrap_ok == 4           && wrap_fail == 0)
         begin
             $display("\n=== PASSED ===");
             ramulator_exit(0);

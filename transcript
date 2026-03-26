@@ -1,5 +1,5 @@
 # vsim -c -voptargs="+acc" -sv_lib ./libramulator_dpi work.test_ramulator -do "run -all" -GCFG=./configs/ddr4_config.yaml 
-# Start time: 17:15:05 on Mar 26,2026
+# Start time: 19:12:13 on Mar 26,2026
 # ** Note: (vsim-3812) Design is being optimized...
 # //  Questa Sim-64
 # //  Version 2021.4 linux_x86_64 Oct 13 2021
@@ -108,7 +108,15 @@
 #   [8d] 8-beat read burst  at 0x00600000
 #     8-beat: rd_ok=8  rd_fail=0
 #   [8] Total burst rd_ok=12/12  rd_fail=0  wr_ok=0  wr_fail=0
-# [9] Multiple outstanding reads: 16 ARs pipelined (r_i_ready=0) ...
+# [9] FIXED burst ...
+#   [9a] 4-beat FIXED write at 0x00900000 (all beats → same addr)
+#   [9a] 4-beat FIXED read  at 0x00900000 (expect 0xf1f1000000000003 x4)
+#     FIXED: OK=4/4  FAIL=0
+# [10] WRAP burst ...
+#   [10a] 4-beat WRAP write at 0x00a00010 (wrap_len=32B, starts mid-region)
+#   [10a] 4-beat WRAP read  at 0x00a00010
+#     WRAP:  OK=4/4  FAIL=0
+# [11] Multiple outstanding reads: 16 ARs pipelined (r_i_ready=0) ...
 #     All 16 ARs accepted. Draining SR FIFO ...
 #     pipe R[0] data=0x0000000000700000 OK
 #     pipe R[1] data=0x0000000000700040 OK
@@ -127,23 +135,25 @@
 #     pipe R[14] data=0x0000000000700380 OK
 #     pipe R[15] data=0x00000000007003c0 OK
 #     Pipeline: acc=16  cmp=16  OK=16  FAIL=0
-# [10] WSTRB byte masking ...
-#   [10a] lower-half mask OK  got=0xdeadbeefbbbbbbbb
-#   [10b] upper-half mask OK  got=0x9999999922222222
-#   [10c] zero strobe OK      got=0x5a5a5a5a5a5a5a5a
-#   [10d] single-byte OK      got=0x0000000000000010
+# [12] WSTRB byte masking ...
+#   [12a] lower-half mask OK  got=0xdeadbeefbbbbbbbb
+#   [12b] upper-half mask OK  got=0x9999999922222222
+#   [12c] zero strobe OK      got=0x5a5a5a5a5a5a5a5a
+#   [12d] single-byte OK      got=0x0000000000000010
 #   WSTRB: OK=4/4  FAIL=0
 # 
 # --- Summary ---
-#   Total ticks   : 2351
+#   Total ticks   : 2519
 #   [2] Writes    : acc=16/16  B-acks=16/16  lat(min/max/avg)=2/2/2
 #   [3-4] Reads   : acc=24/24  R-data=24/24  lat(min/max/avg)=23/206/40
 #   [3-4] Functional: OK=24/24  FAIL=0
 #   [5] RD flood  : ARs acc=48/48  R drained=48/48  max_stall=25 cycles
 #   [6] WR BP     : writes acc=5/5  B-acks=5/5  stall=20 cycles
 #   [7] Simul     : rd acc=2/2  rd cmp=2/2  wr acc=1/1  wr cmp=1/1  func OK=2  FAIL=0
-#   [8] Bursts    : rd_ok=12/12  rd_fail=0  wr_fail=0
-#   [9] SR FIFO   : acc=16/16  cmp=16/16  OK=16  FAIL=0
-#   [10] WSTRB    : OK=4/4  FAIL=0
+#   [8]  INCR     : rd_ok=12/12  rd_fail=0  wr_fail=0
+#   [9]  FIXED    : OK=4/4  FAIL=0
+#   [10] WRAP     : OK=4/4  FAIL=0
+#   [11] SR FIFO  : acc=16/16  cmp=16/16  OK=16  FAIL=0
+#   [12] WSTRB    : OK=4/4  FAIL=0
 # 
 # === PASSED ===
