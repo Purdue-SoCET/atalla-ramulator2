@@ -61,10 +61,22 @@ DPI_SRCS := \
 all: sim
 
 # ---- Build Ramulator DPI shared library via CMake ----
+# Ramulator2 requires C++20 (<ranges>).  RHEL8's default GCC 8 miscompiles
+# the -O3 Release build and crashes at ramulator_init.  Use the gcc-toolset-14
+# compilers directly so cmake always gets a correct C++20-capable toolchain.
+GCC14_CXX := /opt/rh/gcc-toolset-14/root/usr/bin/g++
+GCC14_CC  := /opt/rh/gcc-toolset-14/root/usr/bin/gcc
+GCC14_LIB := /opt/rh/gcc-toolset-14/root/lib64
+
 ram_lib:
 	@echo "[ram_lib] configuring..."
-	cmake -S $(TOPDIR) -B $(TOPDIR)/build -DCMAKE_BUILD_TYPE=Release -G "Unix Makefiles" > /dev/null 2>&1 || true
+	cmake -S $(TOPDIR) -B $(TOPDIR)/build \
+	    -DCMAKE_BUILD_TYPE=Release \
+	    -DCMAKE_CXX_COMPILER=$(GCC14_CXX) \
+	    -DCMAKE_C_COMPILER=$(GCC14_CC) \
+	    -G "Unix Makefiles" > /dev/null 2>&1 || true
 	@echo "[ram_lib] building $(RAMULATOR_TARGET)..."
+	LD_LIBRARY_PATH=$(GCC14_LIB):$$LD_LIBRARY_PATH \
 	cmake --build $(TOPDIR)/build --target $(RAMULATOR_TARGET) -j$$(nproc) 2>&1 | tail -5
 
 # ---- Simulation (batch or GUI) ----

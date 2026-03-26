@@ -130,6 +130,37 @@ module ramulator_sv_wrapper #(
     logic [MID_AWID-1:0] aw_id_reg;
     int                  aw_beat;         // next W beat index (beat 0 already sent)
 
+    // --- WSTRB byte-masking shadow memory ---
+    // Tracks the last byte-merged value written to each address so that
+    // partial-strobe writes can read-modify-write without involving Ramulator.
+    longint              wr_shadow [longint];
+
+    // Blocking temps for write masking (used inside always block)
+    longint              wr_beat_addr;
+    longint              wr_existing;
+    longint              wr_merged;
+
+    // ----------------------------------------------------------------
+    // WSTRB byte-masking helper
+    //
+    // Returns `existing` with bytes selected by `strb` replaced by the
+    // corresponding bytes from `new_data`.  Each bit of strb controls one
+    // byte: strb[i]=1 selects new_data[8i+:8]; strb[i]=0 keeps existing.
+    // ----------------------------------------------------------------
+    function automatic longint apply_wstrb(
+        input longint           existing,
+        input logic [WDATA-1:0] new_data,
+        input logic [WSTRB-1:0] strb
+    );
+        logic [WDATA-1:0] result;
+        result = WDATA'(existing);
+        for (int i = 0; i < WSTRB; i++) begin
+            if (strb[i])
+                result[8*i +: 8] = new_data[8*i +: 8];
+        end
+        return longint'(result);
+    endfunction
+
     // ----------------------------------------------------------------
     // Combinatorial outputs
     // ----------------------------------------------------------------
@@ -355,19 +386,25 @@ module ramulator_sv_wrapper #(
 
             // ----------------------------------------------------------
             // 5a. Accept W beat for an ongoing write burst.
+            //     Apply WSTRB byte masking against the shadow before
+            //     forwarding to Ramulator.
             // ----------------------------------------------------------
             if (aw_active && axi.w_o_valid) begin
+                wr_beat_addr = aw_base_addr + longint'(aw_beat)
+                                            * longint'(1 << int'(aw_size_reg));
+                wr_existing  = wr_shadow.exists(wr_beat_addr) ? wr_shadow[wr_beat_addr] : '0;
+                wr_merged    = apply_wstrb(wr_existing, axi.w_o.data, axi.w_o.strb);
                 dpi_accepted = ramulator_send_request(
                     handle,
-                    aw_base_addr + longint'(aw_beat)
-                                 * longint'(1 << int'(aw_size_reg)),
+                    wr_beat_addr,
                     1,                      // Write
                     int'(aw_id_reg),
-                    longint'(axi.w_o.data)
+                    wr_merged
                 );
                 if (dpi_accepted) begin
-                    axi.w_o_ready <= 1'b1;
-                    aw_beat       <= aw_beat + 1;
+                    axi.w_o_ready        <= 1'b1;
+                    wr_shadow[wr_beat_addr] = wr_merged;
+                    aw_beat              <= aw_beat + 1;
                     if (axi.w_o.last) begin
                         b_fifo[b_wr] <= '{id: aw_id_reg[BID-1:0], resp: B_OKAY};
                         b_wr         <= (b_wr + 1 == B_DEPTH) ? 0 : b_wr + 1;
@@ -379,19 +416,25 @@ module ramulator_sv_wrapper #(
             // ----------------------------------------------------------
             // 5b. Accept AW+W[0] → issue beat 0 and start write burst.
             //     Requires B FIFO space and no burst already in progress.
+            //     Apply WSTRB byte masking against the shadow before
+            //     forwarding to Ramulator.
             // ----------------------------------------------------------
             end else if (!aw_active && axi.aw_o_valid && axi.w_o_valid
                          && b_cnt_next < B_DEPTH) begin
+                wr_beat_addr = longint'(axi.aw_o.addr);
+                wr_existing  = wr_shadow.exists(wr_beat_addr) ? wr_shadow[wr_beat_addr] : '0;
+                wr_merged    = apply_wstrb(wr_existing, axi.w_o.data, axi.w_o.strb);
                 dpi_accepted = ramulator_send_request(
                     handle,
-                    longint'(axi.aw_o.addr),
+                    wr_beat_addr,
                     1,                      // Write
                     int'(axi.aw_o.mid_id),
-                    longint'(axi.w_o.data)
+                    wr_merged
                 );
                 if (dpi_accepted) begin
                     axi.aw_o_ready <= 1'b1;
                     axi.w_o_ready  <= 1'b1;
+                    wr_shadow[wr_beat_addr] = wr_merged;
                     if (axi.w_o.last) begin
                         // Single-beat or last beat arrives with AW
                         b_fifo[b_wr] <= '{id: axi.aw_o.mid_id[BID-1:0], resp: B_OKAY};

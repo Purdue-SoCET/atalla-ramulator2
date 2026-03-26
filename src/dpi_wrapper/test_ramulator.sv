@@ -15,7 +15,8 @@
 //                            verify per-beat data and last flag
 //   [9] Multiple outstanding reads — issue NUM_PIPE ARs with r_i_ready=0,
 //                            verify SR FIFO buffers all responses; drain and check
-//   [10] Pass/fail summary
+//   [10] WSTRB byte masking — lower-half, upper-half, zero, single-byte strobes
+//   [11] Pass/fail summary
 
 `timescale 1ns / 1ps
 
@@ -48,6 +49,7 @@ module test_ramulator #(
     localparam longint BURST4_BASE  = 64'h0050_0000;  // [8] 4-beat burst test
     localparam longint BURST8_BASE  = 64'h0060_0000;  // [8] 8-beat burst test
     localparam longint PIPE_BASE    = 64'h0070_0000;  // [9] SR FIFO pipeline test
+    localparam longint STRB_BASE    = 64'h0080_0000;  // [10] WSTRB byte-mask test
     localparam longint STRIDE       = 64;
     localparam int     NUM_PIPE     = 16;              // [9] must be <= SR_DEPTH
 
@@ -110,6 +112,9 @@ module test_ramulator #(
 
     // Scoreboard — [9] SR FIFO pipeline test
     int     pipe_acc = 0, pipe_cmp = 0, pipe_ok = 0, pipe_fail = 0;
+
+    // Scoreboard — [10] WSTRB byte-masking test
+    int     strb_ok = 0, strb_fail = 0;
 
     // ----------------------------------------------------------------
     // Task: full AXI write (issue AW+W, wait for aw_o_ready, collect B)
@@ -382,6 +387,68 @@ module test_ramulator #(
                 burst_rd_fail++;
             end
         end
+    endtask
+
+    // ----------------------------------------------------------------
+    // Task: single-beat AXI write with an explicit WSTRB value.
+    //   Issues AW+W simultaneously, waits for aw_o_ready, collects B ack.
+    //   Does NOT update shadow[] — caller manages expected values.
+    // ----------------------------------------------------------------
+    task automatic axi_write_strb(
+        input longint              addr,
+        input logic [WDATA-1:0]    data,
+        input logic [WSTRB-1:0]    strb,
+        input logic [MID_AWID-1:0] mid_id
+    );
+        axi.aw_o_valid  = 1'b1;
+        axi.aw_o.addr   = AWADDR'(addr);
+        axi.aw_o.mid_id = mid_id;
+        axi.aw_o.size   = 3'b011;
+        axi.aw_o.len    = 4'h0;
+        axi.aw_o.burst  = 2'b01;
+
+        axi.w_o_valid   = 1'b1;
+        axi.w_o.data    = data;
+        axi.w_o.mid_id  = MID_ARID'(mid_id);
+        axi.w_o.last    = 1'b1;
+        axi.w_o.strb    = strb;
+
+        @(posedge clk); #1;
+        while (!axi.aw_o_ready) begin @(posedge clk); #1; end
+        axi.aw_o_valid = 1'b0;
+        axi.w_o_valid  = 1'b0;
+
+        axi.b_i_ready = 1'b1;
+        while (!axi.b_i_valid) begin @(posedge clk); #1; end
+        @(posedge clk); #1;
+        axi.b_i_ready = 1'b0;
+    endtask
+
+    // ----------------------------------------------------------------
+    // Task: single-beat AXI read without touching global rd counters.
+    //   Used by [10] WSTRB tests so they don't skew [3-4] pass checks.
+    // ----------------------------------------------------------------
+    task automatic axi_read_raw(
+        input  longint              addr,
+        input  logic [MID_ARID-1:0] mid_id,
+        output longint              got_data
+    );
+        axi.ar_o_valid  = 1'b1;
+        axi.ar_o.addr   = ARADDR'(addr);
+        axi.ar_o.mid_id = mid_id;
+        axi.ar_o.size   = 3'b011;
+        axi.ar_o.len    = 4'h0;
+        axi.ar_o.burst  = 2'b01;
+
+        @(posedge clk); #1;
+        while (!axi.ar_o_ready) begin @(posedge clk); #1; end
+        axi.ar_o_valid = 1'b0;
+
+        axi.r_i_ready = 1'b1;
+        while (!axi.r_i_valid) begin @(posedge clk); #1; end
+        got_data = longint'(axi.r_i.data);
+        @(posedge clk); #1;
+        axi.r_i_ready = 1'b0;
     endtask
 
     // ----------------------------------------------------------------
@@ -796,7 +863,79 @@ module test_ramulator #(
         end
 
         // ============================================================
-        // [10] Summary
+        // [10] WSTRB byte masking
+        //
+        // All writes use axi_write_strb (explicit strobe) and reads use
+        // axi_read_raw (does not touch global rd counters).
+        // The wrapper maintains its own wr_shadow and merges bytes before
+        // passing to Ramulator — no masking logic reaches Ramulator.
+        //
+        // [10a] Lower-half strobe (0x0F): upper 4 B preserved from first write
+        // [10b] Upper-half strobe (0xF0): lower 4 B preserved from first write
+        // [10c] Zero strobe (0x00): entire word unchanged (no-op write)
+        // [10d] Single-byte strobe (0x01) to a fresh address: only byte 0 set
+        // ============================================================
+        $display("[10] WSTRB byte masking ...");
+        begin
+            longint got, exp;
+
+            // [10a] Lower-half mask: establish full word, then update bytes 0-3 only
+            axi_write_strb(STRB_BASE,          64'hDEADBEEF_12345678, 8'hFF, MID_AWID'(0));
+            axi_write_strb(STRB_BASE,          64'hAAAAAAAA_BBBBBBBB, 8'h0F, MID_AWID'(0));
+            exp = 64'hDEADBEEF_BBBBBBBB;  // bytes 4-7 from 1st write, bytes 0-3 from 2nd
+            axi_read_raw(STRB_BASE, MID_ARID'(0), got);
+            if (got === exp) begin
+                strb_ok++;
+                $display("  [10a] lower-half mask OK  got=0x%016h", got);
+            end else begin
+                strb_fail++;
+                $display("  [10a] lower-half mask FAIL got=0x%016h exp=0x%016h", got, exp);
+            end
+
+            // [10b] Upper-half mask: establish full word, then update bytes 4-7 only
+            axi_write_strb(STRB_BASE+STRIDE,   64'h11111111_22222222, 8'hFF, MID_AWID'(0));
+            axi_write_strb(STRB_BASE+STRIDE,   64'h99999999_00000000, 8'hF0, MID_AWID'(0));
+            exp = 64'h99999999_22222222;  // bytes 4-7 from 2nd write, bytes 0-3 from 1st
+            axi_read_raw(STRB_BASE+STRIDE, MID_ARID'(0), got);
+            if (got === exp) begin
+                strb_ok++;
+                $display("  [10b] upper-half mask OK  got=0x%016h", got);
+            end else begin
+                strb_fail++;
+                $display("  [10b] upper-half mask FAIL got=0x%016h exp=0x%016h", got, exp);
+            end
+
+            // [10c] Zero strobe: write should be a complete no-op for data
+            axi_write_strb(STRB_BASE+2*STRIDE, 64'h5A5A5A5A_5A5A5A5A, 8'hFF, MID_AWID'(0));
+            axi_write_strb(STRB_BASE+2*STRIDE, 64'hFFFFFFFF_FFFFFFFF, 8'h00, MID_AWID'(0));
+            exp = 64'h5A5A5A5A_5A5A5A5A;  // unchanged
+            axi_read_raw(STRB_BASE+2*STRIDE, MID_ARID'(0), got);
+            if (got === exp) begin
+                strb_ok++;
+                $display("  [10c] zero strobe OK      got=0x%016h", got);
+            end else begin
+                strb_fail++;
+                $display("  [10c] zero strobe FAIL    got=0x%016h exp=0x%016h", got, exp);
+            end
+
+            // [10d] Single-byte strobe to fresh address (shadow defaults to 0)
+            //   data=0xFEDCBA98_76543210, strb=0x01 → only byte 0 = 0x10
+            axi_write_strb(STRB_BASE+3*STRIDE, 64'hFEDCBA98_76543210, 8'h01, MID_AWID'(0));
+            exp = 64'h0000000000000010;
+            axi_read_raw(STRB_BASE+3*STRIDE, MID_ARID'(0), got);
+            if (got === exp) begin
+                strb_ok++;
+                $display("  [10d] single-byte OK      got=0x%016h", got);
+            end else begin
+                strb_fail++;
+                $display("  [10d] single-byte FAIL    got=0x%016h exp=0x%016h", got, exp);
+            end
+
+            $display("  WSTRB: OK=%0d/4  FAIL=%0d", strb_ok, strb_fail);
+        end
+
+        // ============================================================
+        // [11] Summary
         // ============================================================
         $display("\n--- Summary ---");
         $display("  Total ticks   : %0d", tick);
@@ -818,6 +957,8 @@ module test_ramulator #(
                  burst_rd_ok, burst_rd_fail, burst_wr_fail);
         $display("  [9] SR FIFO   : acc=%0d/%0d  cmp=%0d/%0d  OK=%0d  FAIL=%0d",
                  pipe_acc, NUM_PIPE, pipe_cmp, NUM_PIPE, pipe_ok, pipe_fail);
+        $display("  [10] WSTRB    : OK=%0d/4  FAIL=%0d",
+                 strb_ok, strb_fail);
 
         if (wr_acc    == NUM_WR    && wr_cmp  == NUM_WR    &&
             rd_acc    == total_rd  && rd_cmp  == total_rd  &&
@@ -831,7 +972,8 @@ module test_ramulator #(
             burst_rd_ok == 12      && burst_rd_fail == 0    &&
             burst_wr_fail == 0     &&
             pipe_acc == NUM_PIPE   && pipe_cmp == NUM_PIPE  &&
-            pipe_ok == NUM_PIPE    && pipe_fail == 0)
+            pipe_ok == NUM_PIPE    && pipe_fail == 0        &&
+            strb_ok == 4           && strb_fail == 0)
         begin
             $display("\n=== PASSED ===");
             ramulator_exit(0);
