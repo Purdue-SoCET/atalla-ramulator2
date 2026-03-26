@@ -255,18 +255,18 @@ class HBM2 : public IDRAM, public Implementation {
         { 4875,  4875,  2438,  2438},
       };
 
-      int density_id = [](int density_Mb) -> int { 
-        switch (density_Mb) {
-          case 2048:  return 0;
-          case 4096:  return 1;
-          case 8192:  return 2;
-          case 16384: return 3;
-          default:    return -1;
-        }
-      }(m_organization.density);
+     int density_id = [](int density_Mb) -> int { 
+      switch (density_Mb) {
+        case 2048:  return 0;
+        case 4096:  return 1;
+        case 8192:  return 2;
+        case 16384: return 3;
+        default:    return -1;
+      }
+        }(m_organization.density);
 
-      m_timing_vals("nRFC")  = JEDEC_rounding(tRFC_TABLE[0][density_id], tCK_ps);
-      m_timing_vals("nREFISB")  = JEDEC_rounding(tRFC_TABLE[0][density_id], tCK_ps);
+    m_timing_vals("nRFC")    = JEDEC_rounding(tRFC_TABLE[0][density_id], tCK_ps);
+    m_timing_vals("nREFISB") = JEDEC_rounding(tREFISB_TABLE[0][density_id], tCK_ps);
 
       // Overwrite timing parameters with any user-provided value
       // Rate and tCK should not be overwritten

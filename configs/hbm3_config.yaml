@@ -9,7 +9,7 @@ MemorySystem:
   DRAM:
     impl: HBM3
     org:
-      preset: HBM3_8Gb
+      preset: HBM3_2Gb
       channel: 1
     timing:
       preset: HBM3_2Gbps
@@ -25,4 +25,4 @@ MemorySystem:
     plugins:
 
   AddrMapper:
-    impl: ChRaBaRoCo
+    impl: RoBaRaCoCh

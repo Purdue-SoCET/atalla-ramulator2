@@ -1,4 +1,4 @@
-# Current time Thu Mar 26 11:39:32 2026
+# Current time Thu Mar 26 13:55:35 2026
 # Program = vsim
 # Id = "2022.4_5"
 # Version = "2024.06"
@@ -6,32 +6,30 @@
 # Platform = "linux_x86_64"
 # Signature = d238fc838656a161e1f747fef4bf0660
 # --> START OF USERCODE
-# 0    0x00007fffe573865c: 'Ramulator::DRAMNodeBase<Ramulator::HBM2>::update_timing(int, std::vector<int, std::allocator<int> > const&, long) + 0x00000000000001dc' in 'libramulator.so'
-# 1    0x00007fffe5738602: 'Ramulator::DRAMNodeBase<Ramulator::HBM2>::update_timing(int, std::vector<int, std::allocator<int> > const&, long) + 0x0000000000000182' in 'libramulator.so'
-# 2    0x00007fffe5738820: 'Ramulator::HBM2::issue_command(int, std::vector<int, std::allocator<int> > const&) + 0x0000000000000030' in 'libramulator.so'
-# 3    0x00007fffe57712bf: 'Ramulator::GenericDRAMController::tick() + 0x00000000000001ef' in 'libramulator.so'
-# 4    0x00007fffe55f123c: 'Ramulator::GenericDRAMSystem::tick() + 0x000000000000003c' in 'libramulator.so'
+# 0    0x00007fffe56111fe: 'Ramulator::GenericDRAMSystem::send(Ramulator::Request) + 0x000000000000002e' in 'libramulator.so'
+# 1    0x00007fffe55ef47a: 'Ramulator::GEM5::receive_external_requests(int, long, int, std::function<void (Ramulator::Request&)>) + 0x000000000000009a' in 'libramulator.so'
+# 2    0x00007fffe599526e: 'ramulator_send_request + 0x000000000000010e' in '././libramulator_dpi.so'
 # <-- END OF USERCODE
-# 5    0x00007fefe434020f: './src/dpi_wrapper/ramulator_sv_wrapper.sv:65'
-# 6    0x00007fefe4343473: './src/dpi_wrapper/ramulator_sv_wrapper.sv:393'
-# 7    0x0000000003616822: '<unknown (@0x3616822)>'
-# 8    0x00000000004d991b: '<unknown (@0x4d991b)>'
-# 9    0x000000000072f023: '<unknown (@0x72f023)>'
-# 10   0x0000000000c77cdd: '<unknown (@0xc77cdd)>'
-# 11   0x0000000000c7cf33: '<unknown (@0xc7cf33)>'
-# 12   0x0000000000c7ec7e: '<unknown (@0xc7ec7e)>'
-# 13   0x0000000000f5d0bd: '<unknown (@0xf5d0bd)>'
-# 14   0x0000000003ae86cd: '<unknown (@0x3ae86cd)>'
-# 15   0x0000000003aecb26: '<unknown (@0x3aecb26)>'
-# 16   0x0000000003aee211: '<unknown (@0x3aee211)>'
-# 17   0x0000000003aee576: '<unknown (@0x3aee576)>'
-# 18   0x00000000011edac9: '<unknown (@0x11edac9)>'
-# 19   0x0000000003b8e47f: '<unknown (@0x3b8e47f)>'
-# 20   0x0000000003be1ff7: '<unknown (@0x3be1ff7)>'
-# 21   0x0000000003ba4ee7: '<unknown (@0x3ba4ee7)>'
-# 22   0x0000000003ba51c9: '<unknown (@0x3ba51c9)>'
-# 23   0x0000000003979edd: '<unknown (@0x3979edd)>'
-# 24   0x0000000000c40c4c: '<unknown (@0xc40c4c)>'
+# 3    0x00007fefe433fd0d: './src/dpi_wrapper/ramulator_sv_wrapper.sv:61'
+# 4    0x00007fefe43429eb: './src/dpi_wrapper/ramulator_sv_wrapper.sv:332'
+# 5    0x0000000003616822: '<unknown (@0x3616822)>'
+# 6    0x00000000004d991b: '<unknown (@0x4d991b)>'
+# 7    0x000000000072f023: '<unknown (@0x72f023)>'
+# 8    0x0000000000c77cdd: '<unknown (@0xc77cdd)>'
+# 9    0x0000000000c7cf33: '<unknown (@0xc7cf33)>'
+# 10   0x0000000000c7ec7e: '<unknown (@0xc7ec7e)>'
+# 11   0x0000000000f5d0bd: '<unknown (@0xf5d0bd)>'
+# 12   0x0000000003ae86cd: '<unknown (@0x3ae86cd)>'
+# 13   0x0000000003aecb26: '<unknown (@0x3aecb26)>'
+# 14   0x0000000003aee211: '<unknown (@0x3aee211)>'
+# 15   0x0000000003aee576: '<unknown (@0x3aee576)>'
+# 16   0x00000000011edac9: '<unknown (@0x11edac9)>'
+# 17   0x0000000003b8e47f: '<unknown (@0x3b8e47f)>'
+# 18   0x0000000003be1ff7: '<unknown (@0x3be1ff7)>'
+# 19   0x0000000003ba4ee7: '<unknown (@0x3ba4ee7)>'
+# 20   0x0000000003ba51c9: '<unknown (@0x3ba51c9)>'
+# 21   0x0000000003979edd: '<unknown (@0x3979edd)>'
+# 22   0x0000000000c40c4c: '<unknown (@0xc40c4c)>'
 # End of Stack Trace
 
 

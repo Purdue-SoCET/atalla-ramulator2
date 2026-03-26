@@ -1,19 +1,26 @@
 Frontend:
-  impl: GEM5
-  clock_ratio: 1
+  impl: SimpleO3
+  clock_ratio: 8
+  num_expected_insts: 500000
+  traces:
+    - example_inst.trace
+
+Translation:
+  impl: RandomTranslation
+  max_addr: 2147483648
 
 MemorySystem:
   impl: GenericDRAM
   clock_ratio: 1
 
   DRAM:
-    impl: DDR4
+    impl: HBM2
     org:
-      preset: DDR4_8Gb_x8
+      preset: HBM2_4Gb
       channel: 1
-      rank: 1
+      
     timing:
-      preset: DDR4_2400R
+      preset: HBM2_2Gbps
 
   Controller:
     impl: Generic
@@ -24,7 +31,7 @@ MemorySystem:
     RowPolicy:
       impl: ClosedRowPolicy
       cap: 4
-    plugins:
+    plugins: []
 
   AddrMapper:
     impl: RoBaRaCoCh

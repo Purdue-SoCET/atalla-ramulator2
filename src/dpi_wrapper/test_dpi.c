@@ -157,7 +157,7 @@ int main(int argc, char* argv[]) {
 
         /* Drain completions */
         long long resp;
-        uint64_t  resp_data;
+        long long  resp_data;
         while ((resp = ramulator_check_response(handle, &resp_data)) != -1) {
             mark_completed(resp, resp_data);
             inflight--;

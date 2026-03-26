@@ -99,7 +99,7 @@ sim: ram_lib
 	        -sv_lib ./$(RAMULATOR_LIB) \
 	        -G CFG="$(CFG)" \
 	        $(SCRATCH).test_ramulator \
-	        -do "run -all" 2>/dev/null || true; \
+	        -do "run -all"; \
 	    if grep -q "=== PASSED ===" transcript 2>/dev/null; then \
 	        echo "[sim] Result: PASSED"; \
 	    elif grep -q "=== FAILED ===" transcript 2>/dev/null; then \

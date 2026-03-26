@@ -145,8 +145,7 @@ module ramulator_sv_wrapper #(
 
         handle = ramulator_init(CONFIG_FILE);
         if (handle == null)
-            $fatal(1, "[ramulator_sv_wrapper] ramulator_init() returned null. Config: %s",
-                   CONFIG_FILE);
+            $fatal(1, "[ramulator_sv_wrapper] ramulator_init() returned null. Config: %s",CONFIG_FILE);
 
         init_done = 1'b1;
         $display("[ramulator_sv_wrapper] Init OK (config=%s)", CONFIG_FILE);
@@ -155,12 +154,12 @@ module ramulator_sv_wrapper #(
     // ----------------------------------------------------------------
     // Finalize on simulation exit
     // ----------------------------------------------------------------
-    final begin
+    /*final begin
         if (handle != null) begin
             ramulator_finalize(handle);
             $display("[ramulator_sv_wrapper] Finalized.");
         end
-    end
+    end*/
 
     // ----------------------------------------------------------------
     // Clocked logic

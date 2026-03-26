@@ -1,15 +1,15 @@
 Frontend:
   impl: GEM5
-  clock_ratio: 2
+  clock_ratio: 1
 
 MemorySystem:
   impl: GenericDRAM
-  clock_ratio: 2
+  clock_ratio: 1
 
   DRAM:
     impl: HBM2
     org:
-      preset: HBM2_4Gb
+      preset: HBM2_2Gb
       channel: 1
     timing:
       preset: HBM2_2Gbps
@@ -25,4 +25,4 @@ MemorySystem:
     plugins:
 
   AddrMapper:
-    impl: ChRaBaRoCo
+    impl: RoBaRaCoCh
