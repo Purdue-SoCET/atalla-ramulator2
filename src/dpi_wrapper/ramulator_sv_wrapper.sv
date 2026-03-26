@@ -212,13 +212,20 @@ module ramulator_sv_wrapper #(
             // ----------------------------------------------------------
             if (ar_active || !r_pending || axi.r_i_ready) begin
                 dpi_resp = ramulator_check_response(handle, dpi_data_out);
-                if (dpi_resp !== -64'sd1) begin
+                 if (dpi_resp !== -64'sd1) begin
                     if (ar_active) begin
                         // Route to reorder buffer; step 1b outputs in order
                         beat_idx = int'((dpi_resp - ar_base_addr)
                                         >> int'(ar_size_reg));
-                        ar_rob[beat_idx]       <= dpi_data_out;
-                        ar_rob_valid[beat_idx] <= 1'b1;
+
+                        if (beat_idx >= 0 && beat_idx < 16 && beat_idx <= int'(ar_len_reg)) begin
+                            ar_rob[beat_idx]       <= dpi_data_out;
+                            ar_rob_valid[beat_idx] <= 1'b1;
+                        end else begin
+                            $fatal(1,
+                                "[ramulator_sv_wrapper] Bad burst response: resp_addr=%0h base=%0h beat_idx=%0d len=%0d size=%0d",
+                                dpi_resp, ar_base_addr, beat_idx, ar_len_reg, ar_size_reg);
+                        end
                     end else begin
                         // Single-beat: forward directly to R channel register
                         r_reg.data <= dpi_data_out[RDATA-1:0];

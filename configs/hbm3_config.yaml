@@ -25,4 +25,4 @@ MemorySystem:
     plugins:
 
   AddrMapper:
-    impl: RoBaRaCoCh
+    impl: ChRaBaRoCo

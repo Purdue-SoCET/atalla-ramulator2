@@ -13,9 +13,39 @@ using namespace Ramulator;
 
 // Pairs a completed address with the functional data value to return.
 struct CompletedReq {
-    Addr_t   addr;
+    uint64_t addr;
     uint64_t data;
 };
+
+static CompletedReq g_resp_fifo[4096];
+static size_t g_resp_head = 0;
+static size_t g_resp_tail = 0;
+static size_t g_resp_count = 0;
+
+static std::unordered_map<uint64_t, uint64_t> g_functional_mem;
+
+static inline void resp_fifo_reset() {
+    g_resp_head = 0;
+    g_resp_tail = 0;
+    g_resp_count = 0;
+}
+
+static inline bool resp_fifo_push(uint64_t addr, uint64_t data) {
+    if (g_resp_count >= 4096) return false;
+    g_resp_fifo[g_resp_tail].addr = addr;
+    g_resp_fifo[g_resp_tail].data = data;
+    g_resp_tail = (g_resp_tail + 1) % 4096;
+    g_resp_count++;
+    return true;
+}
+
+static inline bool resp_fifo_pop(CompletedReq& out) {
+    if (g_resp_count == 0) return false;
+    out = g_resp_fifo[g_resp_head];
+    g_resp_head = (g_resp_head + 1) % 4096;
+    g_resp_count--;
+    return true;
+}
 
 struct RamulatorWrapper {
     std::unique_ptr<IFrontEnd>    frontend;
@@ -44,6 +74,12 @@ ramulator_handle_t ramulator_init(const char* config_file) {
         wrapper->frontend.reset(Factory::create_frontend(config));
         wrapper->memory_system.reset(Factory::create_memory_system(config));
 
+        if (!wrapper->frontend || !wrapper->memory_system) {
+            fprintf(stderr, "[ramulator_init] ERROR: failed to create frontend or memory system\n");
+            delete wrapper;
+            return nullptr;
+        }
+
         wrapper->frontend->connect_memory_system(wrapper->memory_system.get());
         wrapper->memory_system->connect_frontend(wrapper->frontend.get());
 
@@ -51,11 +87,11 @@ ramulator_handle_t ramulator_init(const char* config_file) {
         wrapper->mem_tick_ratio      = wrapper->memory_system->get_clock_ratio();
         wrapper->cycle_count         = 0;
 
-        // Ramulator2's Factory static registry destructor crashes at process
-        // exit. Register an atexit handler that calls _Exit() before static
-        // destructors run. atexit handlers fire LIFO, so this one (registered
-        // after the Factory's __cxa_atexit entry) fires first and exits cleanly.
-        std::atexit([]() { std::_Exit(0); });
+        if (wrapper->frontend_tick_ratio <= 0) wrapper->frontend_tick_ratio = 1;
+        if (wrapper->mem_tick_ratio <= 0)      wrapper->mem_tick_ratio = 1;
+
+        resp_fifo_reset();
+        g_functional_mem.clear();
 
         return static_cast<ramulator_handle_t>(wrapper);
     } catch (const std::exception& e) {
@@ -75,71 +111,84 @@ int ramulator_send_request(
     uint64_t data
 ) {
     auto* wrapper = static_cast<RamulatorWrapper*>(handle);
+    if (!wrapper) return 0;
 
-    // Functional model: record write data immediately (no timing needed).
-    if (req_type == 1 /* Write */) {
-        wrapper->functional_mem[addr] = data;
-    }
+    try {
+        const uint64_t uaddr = static_cast<uint64_t>(addr);
 
-    // Timing model callback: fires when the DRAM read pipeline completes.
-    auto callback = [wrapper](Request& req) {
-        uint64_t val = 0;
-        auto it = wrapper->functional_mem.find(req.addr);
-        if (it != wrapper->functional_mem.end()) {
-            val = it->second;
-        } else {
-            // Address never written — return address as default.
-            val = static_cast<uint64_t>(req.addr);
+        if (req_type == 1) {
+            g_functional_mem[uaddr] = data;
         }
-        wrapper->completed_requests.push({req.addr, val});
-    };
 
-    bool accepted = wrapper->frontend->receive_external_requests(
-        req_type, addr, source_id, callback
-    );
+        auto callback = [req_type](Request& req) {
+            if (req_type != 0) return;
 
-    if (accepted) {
-        return 1;
+            const uint64_t raddr = static_cast<uint64_t>(req.addr);
+
+            uint64_t val = 0;
+            auto it = g_functional_mem.find(raddr);
+            if (it != g_functional_mem.end()) {
+                val = it->second;
+            } else {
+                val = raddr;
+            }
+
+            if (!resp_fifo_push(raddr, val)) {
+                fprintf(stderr, "[callback] ERROR: completion FIFO overflow addr=0x%llx\n",
+                        (unsigned long long)raddr);
+            }
+        };
+
+        bool accepted = wrapper->frontend->receive_external_requests(
+            req_type, uaddr, source_id, callback
+        );
+
+        return accepted ? 1 : 0;
+    } catch (const std::exception& e) {
+        fprintf(stderr, "[ramulator_send_request] ERROR: %s\n", e.what());
+        return 0;
+    } catch (...) {
+        fprintf(stderr, "[ramulator_send_request] ERROR: unknown exception\n");
+        return 0;
     }
-    return 0;
 }
 
 void ramulator_tick(ramulator_handle_t handle) {
     auto* wrapper = static_cast<RamulatorWrapper*>(handle);
+    if (!wrapper) return;
 
     wrapper->cycle_count++;
 
-    int tick_mult = wrapper->frontend_tick_ratio * wrapper->mem_tick_ratio;
+    const int tick_mult = wrapper->frontend_tick_ratio * wrapper->mem_tick_ratio;
+    if (tick_mult <= 0) return;
+
     if (((wrapper->cycle_count % tick_mult) % wrapper->mem_tick_ratio) == 0) {
         wrapper->frontend->tick();
     }
-    if ((wrapper->cycle_count % tick_mult) % wrapper->frontend_tick_ratio == 0) {
+
+    if (((wrapper->cycle_count % tick_mult) % wrapper->frontend_tick_ratio) == 0) {
         wrapper->memory_system->tick();
     }
 }
 
-long long ramulator_check_response(ramulator_handle_t handle, uint64_t* data_out) {
-    auto* wrapper = static_cast<RamulatorWrapper*>(handle);
+long long ramulator_check_response(ramulator_handle_t handle, long long* data_out) {
+    (void)handle;
 
-    if (wrapper->completed_requests.empty()) {
+    CompletedReq cr;
+    if (!resp_fifo_pop(cr)) {
         return -1;
     }
 
-    CompletedReq cr = wrapper->completed_requests.front();
-    wrapper->completed_requests.pop();
-
     if (data_out) {
-        *data_out = cr.data;
+        *data_out = static_cast<long long>(cr.data);
     }
 
     return static_cast<long long>(cr.addr);
 }
 
 void ramulator_finalize(ramulator_handle_t handle) {
-    // Ramulator2 has heap corruption bugs in finalize() (recursive print_stats
-    // SIGSEGV), destructors (free(): invalid size), and the Factory static
-    // registry at process exit. Skip all cleanup; the OS reclaims memory.
-    (void)handle;
+    auto* wrapper = static_cast<RamulatorWrapper*>(handle);
+    delete wrapper;
 }
 
 // Called from SV instead of $finish to bypass QuestaSim's post-simulation

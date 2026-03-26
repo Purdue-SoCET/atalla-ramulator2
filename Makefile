@@ -11,9 +11,9 @@ CFGROOT   := $(TOPDIR)/configs
 SCRATCH   := work
 
 # ---- Tool overrides ----
-VLIB ?= vlib
-VLOG ?= vlog
-VSIM ?= vsim
+VLIB ?= vlib -64
+VLOG ?= vlog -64
+VSIM ?= vsim -64
 GUI      ?= OFF
 COVERAGE ?= OFF         # set to ON to enable coverage instrumentation
 
@@ -81,21 +81,21 @@ sim: ram_lib
 	$(VLIB) $(SCRATCH); \
 	\
 	echo "[sim] compiling SV sources..."; \
-	$(VLOG) -sv -mfcu -work $(SCRATCH) +acc $(VLOG_COV_FLAGS) \
+	$(VLOG) -64 -sv -mfcu -work $(SCRATCH) +acc $(VLOG_COV_FLAGS) \
 	    +incdir+$(AXIROOT) \
 	    $(AXI_SRCS) \
 	    $(DPI_SRCS); \
 	\
 	echo "[sim] running $(if $(filter ON,$(GUI)),GUI,batch) simulation (config: $(CFG))..."; \
 	if [ "$(GUI)" = "ON" ]; then \
-	    $(VSIM) $(VSIM_COV_FLAGS) -voptargs="+acc" \
+	    $(VSIM) -64 $(VSIM_COV_FLAGS) -voptargs="+acc" \
 	        -sv_lib ./$(RAMULATOR_LIB) \
 	        -G CFG="$(CFG)" \
 	        $(SCRATCH).test_ramulator \
 	        -onfinish stop \
 	        -do "view objects; do $(WAVEROOT)/test_ramulator.do; run -all"; \
 	else \
-	    $(VSIM) $(VSIM_COV_FLAGS) -c -voptargs="+acc" \
+	    $(VSIM) -64 $(VSIM_COV_FLAGS) -c -voptargs="+acc" \
 	        -sv_lib ./$(RAMULATOR_LIB) \
 	        -G CFG="$(CFG)" \
 	        $(SCRATCH).test_ramulator \

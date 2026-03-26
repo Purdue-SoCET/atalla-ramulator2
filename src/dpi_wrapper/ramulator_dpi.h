@@ -31,7 +31,7 @@ void ramulator_tick(ramulator_handle_t handle);
 // Returns the address of the completed request, or -1 if none pending.
 // If data_out is non-NULL, the functional model value for that address is
 // written to *data_out.
-long long ramulator_check_response(ramulator_handle_t handle, uint64_t* data_out);
+long long ramulator_check_response(ramulator_handle_t handle, long long* data_out);
 
 // Cleanup
 void ramulator_finalize(ramulator_handle_t handle);
