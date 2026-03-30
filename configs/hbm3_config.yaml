@@ -21,8 +21,8 @@ MemorySystem:
     RefreshManager:
       impl: AllBank
     RowPolicy:
-      impl: OpenRowPolicy
+      impl: ClosedRowPolicy
     plugins:
 
   AddrMapper:
-    impl: RoBaRaCoCh
+    impl: ChRaBaRoCo
