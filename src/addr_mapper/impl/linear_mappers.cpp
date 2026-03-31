@@ -122,5 +122,41 @@ class MOP4CLXOR final : public LinearMapperBase, public Implementation {
       }
     }
 };
+class HBM3BankInterleave final : public LinearMapperBase, public Implementation {
+  RAMULATOR_REGISTER_IMPLEMENTATION(
+    IAddrMapper,
+    HBM3BankInterleave,
+    "HBM3BankInterleave",
+    "HBM3-friendly mapper: column low, non-row levels next, row high."
+  );
 
+  public:
+    void init() override { }
+
+    void setup(IFrontEnd* frontend, IMemorySystem* memory_system) override {
+      LinearMapperBase::setup(frontend, memory_system);
+    }
+
+    void apply(Request& req) override {
+      req.addr_vec.resize(m_num_levels, -1);
+      Addr_t addr = req.addr >> m_tx_offset;
+
+      // 1) Column bits are the LSBs (after transaction offset) to handle burst data.
+      req.addr_vec[m_col_bits_idx] = slice_lower_bits(addr, m_addr_bits[m_col_bits_idx]);
+
+      // 2) Interleave all hierarchy levels (Channel, Rank, BankGroup, Bank).
+      // Slicing these next ensures sequential addresses are mapped to different 
+      // parallel structures, which is critical for HBM3 bandwidth.
+      for (int lvl = 0; lvl < m_num_levels; lvl++) {
+        if (lvl == m_row_bits_idx || lvl == m_col_bits_idx)
+          continue;
+
+        if (m_addr_bits[lvl] > 0)
+          req.addr_vec[lvl] = slice_lower_bits(addr, m_addr_bits[lvl]);
+      }
+
+      // 3) Row bits are the MSBs.
+      req.addr_vec[m_row_bits_idx] = (int) addr;
+    }
+};
 }   // namespace Ramulator

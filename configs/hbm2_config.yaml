@@ -9,8 +9,8 @@ MemorySystem:
   DRAM:
     impl: HBM2
     org:
-      preset: HBM2_2Gb
-      channel: 1
+      preset: HBM2_8Gb
+      channel: 4
     timing:
       preset: HBM2_2Gbps
 

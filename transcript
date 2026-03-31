@@ -1,5 +1,5 @@
 # vsim -64 -c -voptargs="+acc" -sv_lib ./libramulator_dpi work.test_ramulator -do "run -all" -GCFG=./configs/hbm2_config.yaml 
-# Start time: 16:37:03 on Mar 30,2026
+# Start time: 16:01:23 on Mar 31,2026
 # ** Note: (vsim-3812) Design is being optimized...
 # ** Warning: (vopt-10587) Some optimizations are turned off because the +acc switch is in effect. This will cause your simulation to run slowly. Please use -access/-debug to maintain needed visibility.
 # ** Note: (vsim-12126) Error and warning message counts have been restored: Errors=0, Warnings=1.

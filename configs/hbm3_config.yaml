@@ -9,8 +9,8 @@ MemorySystem:
   DRAM:
     impl: HBM3
     org:
-      preset: HBM3_2Gb
-      channel: 1
+      preset: HBM3_8Gb
+      channel: 4
     timing:
       preset: HBM3_2Gbps
 
@@ -21,8 +21,9 @@ MemorySystem:
     RefreshManager:
       impl: AllBank
     RowPolicy:
-      impl: ClosedRowPolicy
+      impl: OpenRowPolicy
     plugins:
 
   AddrMapper:
     impl: ChRaBaRoCo
+
