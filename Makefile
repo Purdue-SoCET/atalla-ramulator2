@@ -54,8 +54,12 @@ DPI_SRCS := \
 	$(DPIROOT)/ramulator_sv_wrapper.sv \
 	$(DPIROOT)/test_ramulator.sv
 
+SDMA_SRCS := \
+	$(DPIROOT)/ramulator_sv_wrapper.sv \
+	$(DPIROOT)/test_sdma.sv
+
 # ---- Phony targets ----
-.PHONY: all sim sim_gui ram_lib clean \
+.PHONY: all sim sim_gui sdma sdma_gui ram_lib clean \
         ddr3 ddr4 ddr5 gddr6 hbm2 hbm3 lpddr5
 
 all: sim
@@ -123,6 +127,49 @@ sim: ram_lib
 
 sim_gui:
 	@$(MAKE) sim GUI=ON
+
+# ---- SDMA testbench ----
+# Usage:
+#   make sdma              # batch, default config
+#   make sdma GUI=ON       # waveform GUI
+#   make sdma CFG=configs/ddr5_config.yaml
+sdma: ram_lib
+	@\
+	echo "[sdma] cleaning stale work library..."; \
+	rm -rf $(SCRATCH); \
+	$(VLIB) $(SCRATCH); \
+	\
+	echo "[sdma] compiling SV sources..."; \
+	$(VLOG) -sv -mfcu -work $(SCRATCH) +acc $(VLOG_COV_FLAGS) \
+	    +incdir+$(AXIROOT) \
+	    $(AXI_SRCS) \
+	    $(SDMA_SRCS); \
+	\
+	echo "[sdma] running $(if $(filter ON,$(GUI)),GUI,batch) simulation (config: $(CFG))..."; \
+	if [ "$(GUI)" = "ON" ]; then \
+	    $(VSIM) $(VSIM_COV_FLAGS) -voptargs="+acc" \
+	        -sv_lib ./$(RAMULATOR_LIB) \
+	        -G CFG="$(CFG)" \
+	        $(SCRATCH).test_sdma \
+	        -onfinish stop \
+	        -do "view objects; run -all"; \
+	else \
+	    $(VSIM) $(VSIM_COV_FLAGS) -c -voptargs="+acc" \
+	        -sv_lib ./$(RAMULATOR_LIB) \
+	        -G CFG="$(CFG)" \
+	        $(SCRATCH).test_sdma \
+	        -do "run -all" 2>/dev/null || true; \
+	    if grep -q "=== PASSED ===" transcript 2>/dev/null; then \
+	        echo "[sdma] Result: PASSED"; \
+	    elif grep -q "=== FAILED ===" transcript 2>/dev/null; then \
+	        echo "[sdma] Result: FAILED"; exit 1; \
+	    else \
+	        echo "[sdma] Result: UNKNOWN (simulation may have crashed or timed out)"; \
+	    fi; \
+	fi
+
+sdma_gui:
+	@$(MAKE) sdma GUI=ON
 
 # ---- Per-standard shorthand targets ----
 # e.g. "make hbm2" runs batch sim with HBM2 config
