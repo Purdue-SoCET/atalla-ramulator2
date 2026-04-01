@@ -1,5 +1,5 @@
 # vsim -c -voptargs="+acc" -sv_lib ./libramulator_dpi work.test_sdma -do "run -all" -GCFG=./configs/ddr4_config.yaml 
-# Start time: 16:03:51 on Mar 31,2026
+# Start time: 00:02:06 on Apr 01,2026
 # ** Note: (vsim-3812) Design is being optimized...
 # //  Questa Sim-64
 # //  Version 2021.4 linux_x86_64 Oct 13 2021
@@ -22,28 +22,29 @@
 # Loading work.ramulator_sv_wrapper(fast)
 # Loading ././libramulator_dpi.so
 # run -all
-# === SDMA 32x32 Load Test ===
+# === SDMA Tile Load Test ===
 # Config : ./configs/ddr4_config.yaml
-# Matrix : 32x32 int16  (2048 bytes)
-# SDMA   : 8 beats x 8 bytes = 64 bytes/instr  |  32 instrs/layout
+# Matrix : 1024x1024 int16  (2097152 bytes)
+# Tile   : 32x32 int16  (2048 bytes)  |  32x32 tile grid
+# SDMA   : 8 beats x 8 bytes = 64 bytes/instr  |  32768 instrs/layout
 # [1] ramulator_init ... [ramulator_sv_wrapper] Init OK (config=./configs/ddr4_config.yaml)
 # OK
 # [2] Writing matrix to ROW_BASE=0x00000000 ...
-#     256 writes done (ROW_BASE)
-# [2] Writing matrix to TILE_BASE=0x00100000 ...
-#     512 writes done total
-# [3] Row-major load: 32 SDMAs x 8 beats = 256 transactions ...
-#     Queue: 256 entries  stride within instr = 8 B
-#     Row-major:  OK=256/256  FAIL=0  cycles=4403  avg=17/trans
-# [4] Tile-major load: 32 SDMAs x 8 beats = 256 transactions ...
-#     Queue: 256 entries  stride within instr = 64 B (= 1 row)
-#     Tile-major: OK=256/256  FAIL=0  cycles=4348  avg=16/trans
+#     262144 writes done (ROW_BASE)
+# [2] Writing matrix to TILE_BASE=0x00200000 ...
+#     524288 writes done total
+# [3] Row-major load: 32768 SDMAs x 8 beats = 262144 transactions ...
+#     Queue: 262144 entries  stride within instr = 8 B
+#     Row-major:  OK=262144/262144  FAIL=0  cycles=4338168  avg=16/trans
+# [4] Tile-major load: 32768 SDMAs x 8 beats = 262144 transactions ...
+#     Queue: 262144 entries  stride within instr = 2048 B (= 1 row)
+#     Tile-major: OK=262144/262144  FAIL=0  cycles=2957789  avg=11/trans
 # 
 # --- Summary ---
 #   Config        : ./configs/ddr4_config.yaml
-#   [2] Writes    : 512 total (256 per region)
-#   [3] Row-major : OK=256/256  FAIL=0  cycles=4403
-#   [4] Tile-major: OK=256/256  FAIL=0  cycles=4348
-#   Tile/row latency ratio: 0.98x
+#   [2] Writes    : 524288 total (262144 per region)
+#   [3] Row-major : OK=262144/262144  FAIL=0  cycles=4338168
+#   [4] Tile-major: OK=262144/262144  FAIL=0  cycles=2957789
+#   Tile/row latency ratio: 0.68x
 # 
 # === PASSED ===

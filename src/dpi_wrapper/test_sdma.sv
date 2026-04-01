@@ -1,38 +1,44 @@
-// test_sdma.sv — SDMA 32x32 load testbench for ramulator_sv_wrapper
+// test_sdma.sv — SDMA tile load testbench for ramulator_sv_wrapper
 //
 // Emulates the AXI read transactions that an SDMA instruction would generate
-// when loading a 32x32 matrix of int16 (2-byte) elements.
+// when loading tiles from a 1024x1024 matrix of int16 (2-byte) elements.
 //
-// The SDMA instruction issues 8 back-to-back 64-bit (8-byte) single-beat reads.
+// The SDMA instruction issues 8 back-to-back 64-bit (8-byte) single-beat reads,
+// covering one 32-element tile-row (32 cols × 2 bytes = 64 bytes = 8 beats).
 // Two access patterns are tested:
 //
-//   [3] Row-major  — each SDMA covers one full row (8 consecutive 8-byte reads,
-//                    stride = 8 bytes).  All 8 addresses fall in the same DRAM row.
+//   [3] Row-major  — reads the matrix row by row.  Each SDMA covers 32 cols
+//                    (one tile-width) of a single matrix row; 32 SDMAs span the
+//                    full 1024-col row.  All 8 addresses within an SDMA are
+//                    consecutive (stride = 8 bytes).
 //
-//   [4] Tile-major — each SDMA covers 8 bytes across 8 consecutive rows
-//                    (stride = NUM_COLS * ELEM_BYTES = 64 bytes = one row width).
-//                    Each address is in a different DRAM row.
+//   [4] Tile-major — reads the matrix tile by tile (32×32 tiles).  Within each
+//                    tile the data is loaded column-by-column: each SDMA reads
+//                    8 bytes from 8 consecutive tile rows at the same column
+//                    position (stride = ROW_BYTES = 2048 bytes).  Each beat is
+//                    in a different DRAM row → more row activations than row-major.
 //
 // Matrix layout:
-//   32 rows x 32 cols x 2 bytes/elem = 2048 bytes total
-//   Row width = 64 bytes  |  SDMA instruction = 8 x 8 bytes = 64 bytes
-//   Total SDMA instructions per layout = 32
-//   Total AXI transactions per layout  = 32 x 8 = 256
+//   1024 rows × 1024 cols × 2 bytes/elem = 2 MB total
+//   Row width = 2048 bytes  |  SDMA instruction = 8 × 8 bytes = 64 bytes
+//   Tile size = 32×32 elements = 2048 bytes  |  Tile grid = 32×32 = 1024 tiles
+//   Total SDMA instructions per layout = 262144 / 8 = 32768
+//   Total AXI transactions per layout  = 262144
 //
 // Data pattern:
-//   Each int16 element stores its linear index: element[row][col] = row*32 + col.
+//   Each int16 element stores (row * MAT_COLS + col) truncated to 16 bits.
 //   Each 64-bit AXI beat packs 4 consecutive int16 elements (little-endian):
-//     beat_data[15:0]  = element at col_group*4 + 0
-//     beat_data[31:16] = element at col_group*4 + 1
-//     beat_data[47:32] = element at col_group*4 + 2
-//     beat_data[63:48] = element at col_group*4 + 3
+//     beat_data[15:0]  = element at col_base + 0
+//     beat_data[31:16] = element at col_base + 1
+//     beat_data[47:32] = element at col_base + 2
+//     beat_data[63:48] = element at col_base + 3
 //   shadow[] records the expected 64-bit value for every written address.
 //
 // Test plan:
 //   [1] Reset + ramulator_init
-//   [2] Write matrix — 256 writes to ROW_BASE, 256 writes to TILE_BASE
-//   [3] Row-major load  — 256 coalesced single-beat reads; verify data = shadow
-//   [4] Tile-major load — 256 strided  single-beat reads; verify data = shadow
+//   [2] Write matrix — 262144 writes to ROW_BASE, 262144 writes to TILE_BASE
+//   [3] Row-major load  — 262144 coalesced single-beat reads; verify vs shadow
+//   [4] Tile-major load — 262144 strided  single-beat reads; verify vs shadow
 //   [5] Pass/fail summary
 
 `timescale 1ns / 1ps
@@ -45,27 +51,31 @@ module test_sdma #(
     import "DPI-C" function void ramulator_exit(input int code);
 
     // ----------------------------------------------------------------
-    // SDMA / matrix parameters
+    // Matrix / tile / SDMA parameters
     // ----------------------------------------------------------------
     localparam int     B_DEPTH      = 4;
-    localparam int     SDMA_ROWS    = 32;
-    localparam int     SDMA_COLS    = 32;
-    localparam int     SDMA_ELEM_B  = 2;   // bytes per element (int16)
-    localparam int     SDMA_TRANS_B = 8;   // bytes per AXI beat  (64-bit)
-    localparam int     SDMA_TRANS_N = 8;   // beats per SDMA instruction
+    localparam int     MAT_ROWS     = 1024;  // full matrix rows
+    localparam int     MAT_COLS     = 1024;  // full matrix cols
+    localparam int     TILE_ROWS    = 32;    // tile rows
+    localparam int     TILE_COLS    = 32;    // tile cols
+    localparam int     SDMA_ELEM_B  = 2;    // bytes per element (int16)
+    localparam int     SDMA_TRANS_B = 8;    // bytes per AXI beat (64-bit)
+    // One SDMA covers one tile-row: TILE_COLS * SDMA_ELEM_B / SDMA_TRANS_B = 8
+    localparam int     SDMA_TRANS_N = (TILE_COLS * SDMA_ELEM_B) / SDMA_TRANS_B;
 
     // Derived
-    localparam int     ROW_BYTES    = SDMA_COLS * SDMA_ELEM_B;          // 64
-    localparam int     ELEMS_PER_T  = SDMA_TRANS_B / SDMA_ELEM_B;       // 4
-    localparam int     TOTAL_TRANS  = SDMA_ROWS * SDMA_TRANS_N;         // 256
-    localparam int     COL_GROUPS   = (SDMA_COLS * SDMA_ELEM_B) / SDMA_TRANS_B; // 8
-    localparam int     ROW_GROUPS   = SDMA_ROWS / SDMA_TRANS_N;         // 4
+    localparam int     ROW_BYTES    = MAT_COLS  * SDMA_ELEM_B;          // 2048 B per matrix row
+    localparam int     ELEMS_PER_T  = SDMA_TRANS_B / SDMA_ELEM_B;      // 4 elements per beat
+    localparam int     COL_GROUPS   = (MAT_COLS  * SDMA_ELEM_B) / SDMA_TRANS_B; // 256 beats per row
+    localparam int     TILE_COL_GRP = (TILE_COLS * SDMA_ELEM_B) / SDMA_TRANS_B; // 8 beats per tile row
+    localparam int     TILE_ROW_GRP = TILE_ROWS / SDMA_TRANS_N;        // 4 SDMA row-groups per tile
+    localparam int     TOTAL_TRANS  = MAT_ROWS  * COL_GROUPS;           // 262144
 
-    // Base addresses — two separate memory regions, same data layout
-    localparam longint ROW_BASE     = 64'h0000_0000;   // row-major matrix
-    localparam longint TILE_BASE    = 64'h0010_0000;   // tile-major matrix
+    // Base addresses — two separate 2 MB memory regions, same data layout
+    localparam longint ROW_BASE     = 64'h0000_0000;
+    localparam longint TILE_BASE    = 64'h0020_0000;   // 2 MB offset (≥ matrix size)
 
-    localparam int     MAX_CYCLES   = 2_000_000;
+    localparam int     MAX_CYCLES   = 50_000_000;
 
     // ----------------------------------------------------------------
     // Clock / reset
@@ -107,28 +117,28 @@ module test_sdma #(
 
     // ----------------------------------------------------------------
     // Helper: pack 4 consecutive int16 elements into one 64-bit beat.
-    //   element[row][col] = row * SDMA_COLS + col  (linear index, 0-1023)
+    //   element[row][col] = (row * MAT_COLS + col) & 0xFFFF (truncated to 16b)
     //   layout: beat[16*e +: 16] = element at (col_base + e)
     // ----------------------------------------------------------------
     function automatic longint pack_beat(input int row, input int col_base);
         longint d;
         d = 64'h0;
         for (int e = 0; e < ELEMS_PER_T; e++)
-            d |= longint'(row * SDMA_COLS + col_base + e) << (e * 16);
+            d |= (longint'(row * MAT_COLS + col_base + e) & 64'hFFFF) << (e * 16);
         return d;
     endfunction
 
     // ----------------------------------------------------------------
-    // Task: write the 32x32 matrix to a memory region.
+    // Task: write the full 1024x1024 matrix to a memory region.
     //
-    //   Sequentially writes all 256 x 8-byte beats (row by row,
-    //   column-group by column-group) and records each value in shadow[].
+    //   Sequentially writes all MAT_ROWS × COL_GROUPS x 8-byte beats
+    //   (row by row, beat by beat) and records each value in shadow[].
     //   Both ROW_BASE and TILE_BASE are written with identical data so
     //   the same expected values apply regardless of read access order.
     // ----------------------------------------------------------------
     task automatic write_matrix(input longint base_addr);
         longint addr, data;
-        for (int row = 0; row < SDMA_ROWS; row++) begin
+        for (int row = 0; row < MAT_ROWS; row++) begin
             for (int cg = 0; cg < COL_GROUPS; cg++) begin
                 addr = base_addr
                      + longint'(row) * ROW_BYTES
@@ -166,15 +176,17 @@ module test_sdma #(
     // ----------------------------------------------------------------
     // Task: push row-major SDMA load addresses into queue.
     //
-    //   Each SDMA instruction covers one full row (64 bytes = 8 beats).
-    //   Addresses within one instruction are consecutive (stride = 8 B).
+    //   Reads the entire matrix row by row.  Each SDMA covers
+    //   SDMA_TRANS_N = 8 consecutive 8-byte beats (one tile-row width
+    //   = 32 cols × 2 bytes = 64 bytes).  Addresses within one SDMA
+    //   are consecutive (stride = SDMA_TRANS_B = 8 bytes).
     // ----------------------------------------------------------------
     task automatic sdma_gen_row_major(
         input longint base_addr,
         ref   longint q[$]
     );
-        for (int r = 0; r < SDMA_ROWS; r++) begin
-            for (int t = 0; t < SDMA_TRANS_N; t++) begin
+        for (int r = 0; r < MAT_ROWS; r++) begin
+            for (int t = 0; t < COL_GROUPS; t++) begin
                 q.push_back(base_addr
                     + longint'(r) * ROW_BYTES
                     + longint'(t) * SDMA_TRANS_B);
@@ -185,20 +197,32 @@ module test_sdma #(
     // ----------------------------------------------------------------
     // Task: push tile-major SDMA load addresses into queue.
     //
-    //   Each SDMA covers 8 bytes across 8 consecutive rows at the same
-    //   column position.  Stride between beats = ROW_BYTES = 64 bytes.
+    //   Reads the matrix tile by tile (32×32-element tiles).  Within
+    //   each tile the data is loaded column-by-column: each SDMA reads
+    //   SDMA_TRANS_N = 8 bytes from 8 consecutive tile rows at the same
+    //   column position.  Stride within one SDMA = ROW_BYTES = 2048 bytes.
+    //   Each beat is in a different DRAM row → more row activations.
     // ----------------------------------------------------------------
     task automatic sdma_gen_tile_major(
         input longint base_addr,
         ref   longint q[$]
     );
-        for (int rg = 0; rg < ROW_GROUPS; rg++) begin
-            for (int cg = 0; cg < COL_GROUPS; cg++) begin
-                longint sdma_base = base_addr
-                    + longint'(rg) * SDMA_TRANS_N * ROW_BYTES
-                    + longint'(cg) * SDMA_TRANS_B;
-                for (int t = 0; t < SDMA_TRANS_N; t++) begin
-                    q.push_back(sdma_base + longint'(t) * ROW_BYTES);
+        for (int tr = 0; tr < MAT_ROWS / TILE_ROWS; tr++) begin    // 32 tile-row blocks
+            for (int tc = 0; tc < MAT_COLS / TILE_COLS; tc++) begin // 32 tile-col blocks
+                // Top-left byte address of this tile in the matrix
+                longint tile_base = base_addr
+                    + longint'(tr) * TILE_ROWS * ROW_BYTES
+                    + longint'(tc) * TILE_COLS * SDMA_ELEM_B;
+                // Within tile: column groups × row sub-groups × beats
+                for (int cg = 0; cg < TILE_COL_GRP; cg++) begin    // 8 col groups
+                    for (int rg = 0; rg < TILE_ROW_GRP; rg++) begin // 4 row groups of 8 rows
+                        longint sdma_base = tile_base
+                            + longint'(cg) * SDMA_TRANS_B
+                            + longint'(rg) * SDMA_TRANS_N * ROW_BYTES;
+                        for (int t = 0; t < SDMA_TRANS_N; t++) begin // 8 rows
+                            q.push_back(sdma_base + longint'(t) * ROW_BYTES);
+                        end
+                    end
                 end
             end
         end
@@ -306,13 +330,16 @@ module test_sdma #(
         nrst = 1'b1;
 
         // [1] Init
-        $display("=== SDMA 32x32 Load Test ===");
+        $display("=== SDMA Tile Load Test ===");
         $display("Config : %s", CFG);
         $display("Matrix : %0dx%0d int16  (%0d bytes)",
-                 SDMA_ROWS, SDMA_COLS, SDMA_ROWS * SDMA_COLS * SDMA_ELEM_B);
+                 MAT_ROWS, MAT_COLS, MAT_ROWS * MAT_COLS * SDMA_ELEM_B);
+        $display("Tile   : %0dx%0d int16  (%0d bytes)  |  %0dx%0d tile grid",
+                 TILE_ROWS, TILE_COLS, TILE_ROWS * TILE_COLS * SDMA_ELEM_B,
+                 MAT_ROWS / TILE_ROWS, MAT_COLS / TILE_COLS);
         $display("SDMA   : %0d beats x %0d bytes = %0d bytes/instr  |  %0d instrs/layout",
                  SDMA_TRANS_N, SDMA_TRANS_B, SDMA_TRANS_N * SDMA_TRANS_B,
-                 SDMA_ROWS * SDMA_COLS * SDMA_ELEM_B / (SDMA_TRANS_N * SDMA_TRANS_B));
+                 TOTAL_TRANS / SDMA_TRANS_N);
         $write("[1] ramulator_init ... ");
         wait(init_done);
         @(posedge clk); #1;
@@ -321,9 +348,9 @@ module test_sdma #(
         // ============================================================
         // [2] Write matrix to both memory regions
         //
-        //   element[row][col] = row*32 + col  packed into 64-bit beats.
-        //   Both ROW_BASE and TILE_BASE get the same data layout so the
-        //   same shadow[] entries cover both read tests.
+        //   element[row][col] = (row*1024 + col) & 0xFFFF packed into
+        //   64-bit beats.  Both ROW_BASE and TILE_BASE get the same
+        //   data layout so shadow[] entries cover both read tests.
         // ============================================================
         $display("[2] Writing matrix to ROW_BASE=0x%08h ...", ROW_BASE);
         write_matrix(ROW_BASE);
@@ -336,12 +363,12 @@ module test_sdma #(
         // ============================================================
         // [3] Row-major load
         //
-        //   Each SDMA reads one complete row: 8 consecutive 8-byte beats,
-        //   stride = 8 bytes.  All 8 addresses are within the same 64-byte
-        //   aligned block — typically served from the same DRAM row buffer.
+        //   Reads the full matrix row by row.  Each SDMA reads 32 cols
+        //   (8 consecutive 8-byte beats, stride = 8 bytes).  32 SDMAs
+        //   span one 1024-col row; all addresses are in the same DRAM row.
         // ============================================================
         $display("[3] Row-major load: %0d SDMAs x %0d beats = %0d transactions ...",
-                 SDMA_ROWS, SDMA_TRANS_N, TOTAL_TRANS);
+                 TOTAL_TRANS / SDMA_TRANS_N, SDMA_TRANS_N, TOTAL_TRANS);
         sdma_gen_row_major(ROW_BASE, q);
         $display("    Queue: %0d entries  stride within instr = %0d B",
                  q.size(), SDMA_TRANS_B);
@@ -353,12 +380,14 @@ module test_sdma #(
         // ============================================================
         // [4] Tile-major load
         //
-        //   Each SDMA reads 8 bytes from 8 consecutive rows at the same
-        //   column position.  Stride = ROW_BYTES = 64 bytes = 1 full row.
-        //   Each beat is in a different DRAM row → more row activations.
+        //   Reads the matrix tile by tile (32×32 tiles, 32×32 tile grid).
+        //   Within each tile data is loaded column-by-column: each SDMA
+        //   reads 8 bytes from 8 consecutive rows at the same column
+        //   position (stride = ROW_BYTES = 2048 bytes).  Each beat is in
+        //   a different DRAM row → more row activations than row-major.
         // ============================================================
         $display("[4] Tile-major load: %0d SDMAs x %0d beats = %0d transactions ...",
-                 ROW_GROUPS * COL_GROUPS, SDMA_TRANS_N, TOTAL_TRANS);
+                 TOTAL_TRANS / SDMA_TRANS_N, SDMA_TRANS_N, TOTAL_TRANS);
         sdma_gen_tile_major(TILE_BASE, q);
         $display("    Queue: %0d entries  stride within instr = %0d B (= 1 row)",
                  q.size(), ROW_BYTES);
