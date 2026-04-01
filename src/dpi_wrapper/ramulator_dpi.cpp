@@ -8,10 +8,11 @@
 #include <stdexcept>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 using namespace Ramulator;
 
-// Pairs a completed address with the functional data value to return.
+// bundles the address and data together so we can push one thing onto the queue
 struct CompletedReq {
     Addr_t   addr;
     uint64_t data;
@@ -23,9 +24,8 @@ struct RamulatorWrapper {
 
     std::queue<CompletedReq> completed_requests;
 
-    // Functional model: shadow memory storing the last value written to each address.
-    // Reads to addresses that have never been written return the address itself
-    // as a deterministic default.
+    // tracks the last value written to each address; reads return 0 for
+    // anything that hasn't been written yet
     std::unordered_map<Addr_t, uint64_t> functional_mem;
 
     int      mem_tick_ratio;
@@ -51,10 +51,9 @@ ramulator_handle_t ramulator_init(const char* config_file) {
         wrapper->mem_tick_ratio      = wrapper->memory_system->get_clock_ratio();
         wrapper->cycle_count         = 0;
 
-        // Ramulator2's Factory static registry destructor crashes at process
-        // exit. Register an atexit handler that calls _Exit() before static
-        // destructors run. atexit handlers fire LIFO, so this one (registered
-        // after the Factory's __cxa_atexit entry) fires first and exits cleanly.
+        // Ramulator2's Factory registry destructor segfaults on exit. We register
+        // an atexit that calls _Exit() so it fires before the Factory's own
+        // cxa_atexit entry (LIFO order) and bails out cleanly.
         std::atexit([]() { std::_Exit(0); });
 
         return static_cast<ramulator_handle_t>(wrapper);
@@ -76,19 +75,19 @@ int ramulator_send_request(
 ) {
     auto* wrapper = static_cast<RamulatorWrapper*>(handle);
 
-    // Functional model: record write data immediately (no timing needed).
+    // write data lands in functional_mem right away, no need to wait for timing
     if (req_type == 1 /* Write */) {
         wrapper->functional_mem[addr] = data;
     }
 
-    // Timing model callback: fires when the DRAM read pipeline completes.
+    // callback fires when the DRAM pipeline finishes the request
     auto callback = [wrapper](Request& req) {
         uint64_t val = 0;
         auto it = wrapper->functional_mem.find(req.addr);
         if (it != wrapper->functional_mem.end()) {
             val = it->second;
         } else {
-            // Address never written — return address as default.
+            // never written — use the address itself as a recognizable placeholder
             val = static_cast<uint64_t>(req.addr);
         }
         wrapper->completed_requests.push({req.addr, val});
@@ -143,17 +142,83 @@ uint64_t ramulator_read_mem(ramulator_handle_t handle, unsigned long long addr) 
     return 0;
 }
 
+long long ramulator_load_mem_bin(
+    ramulator_handle_t handle,
+    const char*        path,
+    unsigned long long base_addr
+) {
+    auto* wrapper = static_cast<RamulatorWrapper*>(handle);
+
+    FILE* f = fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "[ramulator_load_mem_bin] Cannot open '%s'\n", path);
+        return -1;
+    }
+
+    uint8_t  buf[8];
+    long long beats = 0;
+    size_t   n;
+    while ((n = fread(buf, 1, 8, f)) > 0) {
+        if (n < 8) memset(buf + n, 0, 8 - n);   // zero-pad last beat
+        uint64_t val;
+        memcpy(&val, buf, 8);                    // little-endian host order
+        Addr_t addr = static_cast<Addr_t>(base_addr + static_cast<unsigned long long>(beats) * 8);
+        wrapper->functional_mem[addr] = val;
+        beats++;
+    }
+    fclose(f);
+    return beats;
+}
+
+long long ramulator_load_mem_hex(
+    ramulator_handle_t handle,
+    const char*        path
+) {
+    auto* wrapper = static_cast<RamulatorWrapper*>(handle);
+
+    FILE* f = fopen(path, "r");
+    if (!f) {
+        fprintf(stderr, "[ramulator_load_mem_hex] Cannot open '%s'\n", path);
+        return -1;
+    }
+
+    char      line[256];
+    long long entries = 0;
+    long long lineno  = 0;
+    while (fgets(line, sizeof(line), f)) {
+        lineno++;
+        // Skip blank lines and comments (# or //)
+        char* p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '\0' || *p == '\n' || *p == '#' ||
+            (p[0] == '/' && p[1] == '/'))
+            continue;
+
+        unsigned long long addr, data;
+        if (sscanf(p, "%llx %llx", &addr, &data) != 2) {
+            fprintf(stderr, "[ramulator_load_mem_hex] Parse error at %s:%lld: '%s'\n",
+                    path, lineno, line);
+            fclose(f);
+            return -1;
+        }
+        wrapper->functional_mem[static_cast<Addr_t>(addr)] =
+            static_cast<uint64_t>(data);
+        entries++;
+    }
+    fclose(f);
+    return entries;
+}
+
 void ramulator_finalize(ramulator_handle_t handle) {
-    // Ramulator2 has heap corruption bugs in finalize() (recursive print_stats
-    // SIGSEGV), destructors (free(): invalid size), and the Factory static
-    // registry at process exit. Skip all cleanup; the OS reclaims memory.
+    // Intentionally empty. Ramulator2 crashes in finalize() (print_stats
+    // recursion), in destructors, and in the Factory registry at exit.
+    // The atexit handler in ramulator_init calls _Exit() to skip all of it.
     (void)handle;
 }
 
-// Called from SV instead of $finish to bypass QuestaSim's post-simulation
-// cleanup, which hits the heap corruption left by Ramulator2.
-// _Exit() terminates the process immediately without running destructors,
-// atexit handlers, or any simulator teardown code.
+// Use this instead of $finish. QuestaSim's post-sim teardown walks into
+// the heap corruption that Ramulator2 leaves behind, so we just call
+// _Exit() and skip destructors entirely.
 void ramulator_exit(int code) {
     std::_Exit(code);
 }

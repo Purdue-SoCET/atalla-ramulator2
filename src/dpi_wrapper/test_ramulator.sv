@@ -1,42 +1,41 @@
-// test_ramulator.sv — AXI master-side smoketest for ramulator_sv_wrapper
+// test_ramulator.sv — AXI smoketest for ramulator_sv_wrapper
 //
-// Test plan:
-//   [1] Reset + ramulator_init
-//   [2] Write phase      — NUM_WR writes, verify B ack per write
-//   [3] Read-after-write — read back each written address, check vs shadow mem
-//   [4] Raw reads        — read unwritten addresses, check wrapper returns addr
-//   [5] Read backpressure — flood Ramulator read queue with r_i_ready=0;
-//                           verify stall cycles increase; drain all responses
-//   [6] Write backpressure — fill B FIFO (B_DEPTH writes, b_i_ready=0);
-//                            verify next write stalls; drain all B-acks
-//   [7] Simultaneous R+W  — assert AR + AW+W in the same cycle; verify both
-//                            accepted; check R data; read-back written addr
-//   [8] Multi-beat INCR bursts — 4-beat and 8-beat write+read bursts;
-//                            verify per-beat data and last flag
-//   [9] FIXED burst — 4-beat write+read to same address; last beat wins
-//   [10] WRAP burst  — 4-beat write+read starting mid-region; address wraps
-//   [11] Multiple outstanding reads — issue NUM_PIPE ARs with r_i_ready=0,
-//                            verify SR FIFO buffers all responses; drain and check
-//   [12] WSTRB byte masking — lower-half, upper-half, zero, single-byte strobes
+// Runs through the main features in order:
+//   [1]  Reset + init
+//   [2]  Write phase — NUM_WR writes, one B-ack each
+//   [3]  Read-after-write — read back all written addresses, verify vs shadow
+//   [4]  Raw reads — read unwritten addresses, wrapper should return addr-as-data
+//   [5]  Read backpressure — flood with r_i_ready=0, check stall cycles, then drain
+//   [6]  Write backpressure — fill B FIFO with b_i_ready=0, verify stall, then drain
+//   [7]  Simultaneous R+W — AR and AW+W in the same cycle; both should be accepted
+//   [8]  INCR bursts — 4-beat and 8-beat write+read, check per-beat data and last flag
+//   [9]  FIXED burst — 4-beat write+read to same address; last write wins on readback
+//   [10] WRAP burst — 4-beat write+read starting mid-region; address should wrap
+//   [11] Multiple outstanding reads — issue NUM_PIPE ARs, verify SR FIFO buffers them
+//   [12] WSTRB byte masking — lower-half, upper-half, zero-strobe, single-byte cases
 //   [13] Pass/fail summary
 
 `timescale 1ns / 1ps
 
 module test_ramulator #(
-    // Overridable from the command line: make sim CFG=configs/other.yaml
-    // vsim passes it via -G CFG="..." and vlog via +define+... is NOT used here.
-    parameter string CFG = "configs/ddr4_config.yaml"
+    // Override from make: make sim CFG=configs/other.yaml  (passed via -G)
+    parameter string  CFG          = "configs/ddr4_config.yaml",
+    // Forwarded to ramulator_sv_wrapper for functional_mem preload.
+    // With USE_MEMINIT=1, phase [2] is skipped and shadow[] is pre-populated
+    // from the known meminit pattern so [3] can verify the preloaded data.
+    parameter string  MEMINIT_FILE = "",
+    parameter string  MEMINIT_TYPE = "hex",
+    parameter longint MEMINIT_BASE = 0,
+    parameter bit     USE_MEMINIT  = 0
 );
     import axi_bus_pkg::*;
 
-    // Use ramulator_exit() to bypass QuestaSim post-sim cleanup which
-    // hits heap corruption left by Ramulator2 (see ramulator_dpi.cpp).
+    // Use instead of $finish — QuestaSim cleanup hits Ramulator2 heap corruption.
     import "DPI-C" function void ramulator_exit(input int code);
 
     // ----------------------------------------------------------------
-    // Parameters  — B_DEPTH must match ramulator_sv_wrapper's B_DEPTH
+    // Parameters — B_DEPTH must match ramulator_sv_wrapper's B_DEPTH
     // ----------------------------------------------------------------
-    // CFG is now a top-level parameter (see module header above)
     localparam int     NUM_WR       = 16;
     localparam int     NUM_RD_RAW   = 8;
     localparam int     NUM_FLOOD    = 48;   // ARs to fire in read-BP test
@@ -71,8 +70,11 @@ module test_ramulator #(
     logic init_done;
 
     ramulator_sv_wrapper #(
-        .CONFIG_FILE(CFG),
-        .B_DEPTH    (B_DEPTH)
+        .CONFIG_FILE   (CFG),
+        .B_DEPTH       (B_DEPTH),
+        .MEM_INIT_FILE (MEMINIT_FILE),
+        .MEM_INIT_TYPE (MEMINIT_TYPE),
+        .MEM_INIT_BASE (MEMINIT_BASE)
     ) dut (
         .axi      (axi),
         .init_done(init_done)
@@ -85,7 +87,7 @@ module test_ramulator #(
     always @(posedge clk) tick++;
 
     // ----------------------------------------------------------------
-    // Scoreboard — [2]-[4]
+    // Scoreboards
     // ----------------------------------------------------------------
     longint shadow   [longint];
     int     wr_acc   = 0, wr_cmp   = 0;
@@ -94,36 +96,36 @@ module test_ramulator #(
     longint wr_lat_min = 2_000_000_000, wr_lat_max = 0, wr_lat_total = 0;
     longint rd_lat_min = 2_000_000_000, rd_lat_max = 0, rd_lat_total = 0;
 
-    // Scoreboard — [5] read flood
+    // [5] read flood
     int     flood_acc = 0, flood_cmp = 0;
     longint flood_stall_max = 0;
 
-    // Scoreboard — [6] write backpressure
-    // bp_wr_acc : writes accepted (aw_o_ready seen)
-    // bp_wr_cmp : B-acks collected
-    // bp_stall  : cycles write #B_DEPTH stalled before FIFO had room
+    // [6] write backpressure
+    // bp_wr_acc  : writes accepted (aw_o_ready seen)
+    // bp_wr_cmp  : B-acks collected
+    // bp_stall   : how many cycles write #B_DEPTH stalled waiting for FIFO room
     int     bp_wr_acc = 0, bp_wr_cmp = 0;
     longint bp_stall  = 0;
 
-    // Scoreboard — [7] simultaneous
+    // [7] simultaneous R+W
     int     sim_rd_acc = 0, sim_rd_cmp = 0;
     int     sim_wr_acc = 0, sim_wr_cmp = 0;
     int     sim_func_ok = 0, sim_func_fail = 0;
 
-    // Scoreboard — [8] multi-beat INCR bursts
+    // [8] INCR bursts
     int     burst_wr_ok = 0, burst_wr_fail = 0;
     int     burst_rd_ok = 0, burst_rd_fail = 0;
 
-    // Scoreboard — [9] SR FIFO pipeline test
+    // [11] SR FIFO pipeline
     int     pipe_acc = 0, pipe_cmp = 0, pipe_ok = 0, pipe_fail = 0;
 
-    // Scoreboard — [10] WSTRB byte-masking test
+    // [12] WSTRB
     int     strb_ok = 0, strb_fail = 0;
 
-    // Scoreboard — [11] FIXED burst test
+    // [9] FIXED burst
     int     fixed_ok = 0, fixed_fail = 0;
 
-    // Scoreboard — [12] WRAP burst test
+    // [10] WRAP burst
     int     wrap_ok = 0, wrap_fail = 0;
 
     // ----------------------------------------------------------------
@@ -625,19 +627,31 @@ module test_ramulator #(
         @(posedge clk); #1;
         $display("OK");
 
-        // [2] Write phase
-        $display("[2] %0d writes (AW+W simultaneous, B ack per write) ...", NUM_WR);
-        for (int i = 0; i < NUM_WR; i++) begin
-            axi_write(
-                WR_BASE + longint'(i) * STRIDE,
-                WDATA'(64'hC0FFEE00_00000000 | longint'(i)),
-                MID_AWID'(i % (1 << MID_AWID))
-            );
+        // [2] Write phase — skipped when USE_MEMINIT=1 (data already in functional_mem)
+        if (USE_MEMINIT) begin
+            // Pre-populate shadow[] with the values meminit.hex loaded into
+            // functional_mem.  Pattern matches configs/meminit.hex WR_BASE entries:
+            //   data = 0xC0FFEE00_00000000 | i  for i = 0..NUM_WR-1
+            $display("[2] (meminit active) Skipping AXI writes — pre-loading shadow for [3] ...");
+            for (int i = 0; i < NUM_WR; i++)
+                shadow[WR_BASE + longint'(i) * STRIDE] =
+                    64'hC0FFEE00_00000000 | longint'(i);
+            $display("    shadow pre-loaded for %0d addresses", NUM_WR);
+        end else begin
+            $display("[2] %0d writes (AW+W simultaneous, B ack per write) ...", NUM_WR);
+            for (int i = 0; i < NUM_WR; i++) begin
+                axi_write(
+                    WR_BASE + longint'(i) * STRIDE,
+                    WDATA'(64'hC0FFEE00_00000000 | longint'(i)),
+                    MID_AWID'(i % (1 << MID_AWID))
+                );
+            end
+            $display("    accepted=%0d  B-acks=%0d", wr_acc, wr_cmp);
         end
-        $display("    accepted=%0d  B-acks=%0d", wr_acc, wr_cmp);
 
-        // [3] Read-after-write
-        $display("[3] %0d reads (read-after-write, verify vs shadow) ...", NUM_WR);
+        // [3] Read-after-write / read-after-preload
+        $display("[3] %0d reads (%0s, verify vs shadow) ...", NUM_WR,
+                 USE_MEMINIT ? "read-after-preload" : "read-after-write");
         for (int i = 0; i < NUM_WR; i++) begin
             axi_read(
                 WR_BASE + longint'(i) * STRIDE,
@@ -1151,9 +1165,12 @@ module test_ramulator #(
         // ============================================================
         $display("\n--- Summary ---");
         $display("  Total ticks   : %0d", tick);
-        $display("  [2] Writes    : acc=%0d/%0d  B-acks=%0d/%0d  lat(min/max/avg)=%0d/%0d/%0d",
-                 wr_acc, NUM_WR, wr_cmp, NUM_WR,
-                 wr_lat_min, wr_lat_max, wr_lat_total / (wr_cmp > 0 ? wr_cmp : 1));
+        if (USE_MEMINIT)
+            $display("  [2] Writes    : SKIPPED (meminit active — shadow pre-loaded)");
+        else
+            $display("  [2] Writes    : acc=%0d/%0d  B-acks=%0d/%0d  lat(min/max/avg)=%0d/%0d/%0d",
+                     wr_acc, NUM_WR, wr_cmp, NUM_WR,
+                     wr_lat_min, wr_lat_max, wr_lat_total / (wr_cmp > 0 ? wr_cmp : 1));
         $display("  [3-4] Reads   : acc=%0d/%0d  R-data=%0d/%0d  lat(min/max/avg)=%0d/%0d/%0d",
                  rd_acc, total_rd, rd_cmp, total_rd,
                  rd_lat_min, rd_lat_max, rd_lat_total / (rd_cmp > 0 ? rd_cmp : 1));
@@ -1176,7 +1193,8 @@ module test_ramulator #(
         $display("  [12] WSTRB    : OK=%0d/4  FAIL=%0d",
                  strb_ok, strb_fail);
 
-        if (wr_acc    == NUM_WR    && wr_cmp  == NUM_WR    &&
+        if ((USE_MEMINIT ? (wr_acc == 0 && wr_cmp == 0)
+                         : (wr_acc == NUM_WR && wr_cmp == NUM_WR)) &&
             rd_acc    == total_rd  && rd_cmp  == total_rd  &&
             func_fail == 0         &&
             flood_acc == NUM_FLOOD && flood_cmp == NUM_FLOOD &&

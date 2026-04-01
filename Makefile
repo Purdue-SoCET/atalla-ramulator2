@@ -41,6 +41,48 @@ DRAM_CFG_lpddr5 := $(CFGROOT)/lpddr5_config.yaml
 # CFG can still be overridden directly; otherwise resolved from DRAM
 CFG ?= $(DRAM_CFG_$(DRAM))
 
+# ---- Memory preload (test_ramulator) ----
+# Optional: set MEMINIT to a .hex or .bin file to preload functional_mem.
+#   make sim   MEMINIT=configs/meminit.hex
+#   make sim   MEMINIT=path/to/image.bin  MEMINIT_TYPE=bin  MEMINIT_BASE=0x80000000
+# MEMINIT_TYPE defaults to "hex"; MEMINIT_BASE defaults to 0 (bin only).
+MEMINIT      ?=
+MEMINIT_TYPE ?= hex
+MEMINIT_BASE ?= 0
+
+ifneq ($(MEMINIT),)
+  MEMINIT_FLAGS := -G MEM_INIT_FILE="$(MEMINIT)" \
+                   -G MEM_INIT_TYPE="$(MEMINIT_TYPE)" \
+                   -G MEM_INIT_BASE=$(MEMINIT_BASE) \
+                   -G MEMINIT_FILE="$(MEMINIT)" \
+                   -G MEMINIT_TYPE="$(MEMINIT_TYPE)" \
+                   -G MEMINIT_BASE=$(MEMINIT_BASE) \
+                   -G USE_MEMINIT=1
+else
+  MEMINIT_FLAGS :=
+endif
+
+# ---- Memory preload (test_sdma) ----
+# Optional: set SDMA_MEMINIT to skip all AXI matrix writes.
+#   Generate : make gen_sdma_meminit   (or: python3 scripts/gen_sdma_meminit.py)
+#   Run      : make sdma SDMA_MEMINIT=configs/sdma_meminit.bin
+# SDMA_MEMINIT_TYPE defaults to "bin" (raw binary); base address is always 0.
+SDMA_MEMINIT      ?=
+SDMA_MEMINIT_TYPE ?= bin
+SDMA_MEMINIT_BASE ?= 0
+
+ifneq ($(SDMA_MEMINIT),)
+  SDMA_MEMINIT_FLAGS := -G MEM_INIT_FILE="$(SDMA_MEMINIT)" \
+                        -G MEM_INIT_TYPE="$(SDMA_MEMINIT_TYPE)" \
+                        -G MEM_INIT_BASE=$(SDMA_MEMINIT_BASE) \
+                        -G MEMINIT_FILE="$(SDMA_MEMINIT)" \
+                        -G MEMINIT_TYPE="$(SDMA_MEMINIT_TYPE)" \
+                        -G MEMINIT_BASE=$(SDMA_MEMINIT_BASE) \
+                        -G USE_MEMINIT=1
+else
+  SDMA_MEMINIT_FLAGS :=
+endif
+
 # ---- Ramulator shared library ----
 RAMULATOR_LIB    := libramulator_dpi
 RAMULATOR_TARGET := ramulator_dpi_shared
@@ -59,7 +101,7 @@ SDMA_SRCS := \
 	$(DPIROOT)/test_sdma.sv
 
 # ---- Phony targets ----
-.PHONY: all sim sim_gui sdma sdma_gui ram_lib clean \
+.PHONY: all sim sim_gui sdma sdma_gui ram_lib gen_sdma_meminit clean \
         ddr3 ddr4 ddr5 gddr6 hbm2 hbm3 lpddr5
 
 all: sim
@@ -107,6 +149,7 @@ sim: ram_lib
 	    $(VSIM) $(VSIM_COV_FLAGS) -voptargs="+acc" \
 	        -sv_lib ./$(RAMULATOR_LIB) \
 	        -G CFG="$(CFG)" \
+	        $(MEMINIT_FLAGS) \
 	        $(SCRATCH).test_ramulator \
 	        -onfinish stop \
 	        -do "view objects; do $(WAVEROOT)/test_ramulator.do; run -all"; \
@@ -114,6 +157,7 @@ sim: ram_lib
 	    $(VSIM) $(VSIM_COV_FLAGS) -c -voptargs="+acc" \
 	        -sv_lib ./$(RAMULATOR_LIB) \
 	        -G CFG="$(CFG)" \
+	        $(MEMINIT_FLAGS) \
 	        $(SCRATCH).test_ramulator \
 	        -do "run -all" 2>/dev/null || true; \
 	    if grep -q "=== PASSED ===" transcript 2>/dev/null; then \
@@ -150,6 +194,7 @@ sdma: ram_lib
 	    $(VSIM) $(VSIM_COV_FLAGS) -voptargs="+acc" \
 	        -sv_lib ./$(RAMULATOR_LIB) \
 	        -G CFG="$(CFG)" \
+	        $(SDMA_MEMINIT_FLAGS) \
 	        $(SCRATCH).test_sdma \
 	        -onfinish stop \
 	        -do "view objects; run -all"; \
@@ -157,6 +202,7 @@ sdma: ram_lib
 	    $(VSIM) $(VSIM_COV_FLAGS) -c -voptargs="+acc" \
 	        -sv_lib ./$(RAMULATOR_LIB) \
 	        -G CFG="$(CFG)" \
+	        $(SDMA_MEMINIT_FLAGS) \
 	        $(SCRATCH).test_sdma \
 	        -do "run -all" 2>/dev/null || true; \
 	    if grep -q "=== PASSED ===" transcript 2>/dev/null; then \
@@ -170,6 +216,12 @@ sdma: ram_lib
 
 sdma_gui:
 	@$(MAKE) sdma GUI=ON
+
+# ---- Generate SDMA meminit binary ----
+# Produces configs/sdma_meminit.bin (4 MB: ROW_BASE + TILE_BASE regions).
+# Only needs to be run once; regenerate if matrix parameters change.
+gen_sdma_meminit:
+	python3 $(TOPDIR)/scripts/gen_sdma_meminit.py
 
 # ---- Per-standard shorthand targets ----
 # e.g. "make hbm2" runs batch sim with HBM2 config
