@@ -135,6 +135,14 @@ long long ramulator_check_response(ramulator_handle_t handle, uint64_t* data_out
     return static_cast<long long>(cr.addr);
 }
 
+uint64_t ramulator_read_mem(ramulator_handle_t handle, unsigned long long addr) {
+    auto* wrapper = static_cast<RamulatorWrapper*>(handle);
+    auto it = wrapper->functional_mem.find(static_cast<Addr_t>(addr));
+    if (it != wrapper->functional_mem.end())
+        return it->second;
+    return 0;
+}
+
 void ramulator_finalize(ramulator_handle_t handle) {
     // Ramulator2 has heap corruption bugs in finalize() (recursive print_stats
     // SIGSEGV), destructors (free(): invalid size), and the Factory static

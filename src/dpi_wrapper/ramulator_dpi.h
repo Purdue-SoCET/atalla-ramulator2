@@ -33,6 +33,12 @@ void ramulator_tick(ramulator_handle_t handle);
 // written to *data_out.
 long long ramulator_check_response(ramulator_handle_t handle, uint64_t* data_out);
 
+// Read the current functional-model value for an address without issuing a
+// timing request.  Returns the last value written to addr, or 0 if addr has
+// never been written.  Zero clock-cycle cost; safe to call inside an always
+// block before ramulator_send_request to implement WSTRB read-modify-write.
+uint64_t ramulator_read_mem(ramulator_handle_t handle, unsigned long long addr);
+
 // Cleanup
 void ramulator_finalize(ramulator_handle_t handle);
 
