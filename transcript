@@ -1,5 +1,5 @@
 # vsim -c -voptargs="+acc" -sv_lib ./libramulator_dpi work.test_sdma -do "run -all" -GMEMINIT_TYPE=bin -GMEM_INIT_BASE=0 -GCFG=./configs/ddr4_config.yaml -GMEMINIT_BASE=0 -GMEM_INIT_FILE=configs/sdma_meminit.bin -GMEMINIT_FILE=configs/sdma_meminit.bin -GUSE_MEMINIT=1 -GMEM_INIT_TYPE=bin 
-# Start time: 01:25:49 on Apr 02,2026
+# Start time: 19:03:31 on Apr 02,2026
 # ** Note: (vsim-3812) Design is being optimized...
 # //  Questa Sim-64
 # //  Version 2021.4 linux_x86_64 Oct 13 2021
@@ -26,31 +26,31 @@
 # Config : ./configs/ddr4_config.yaml
 # Matrix : 1024x1024 int16  (2097152 bytes)
 # Tile   : 32x32 int16  (2048 bytes)  |  32x32 tile grid
-# SDMA   : 8 beats x 8 bytes = 64 bytes/instr  |  32768 instrs/layout
+# SDMA   : 256 beats x 8 bytes = 2048 bytes/instr  |  1024 instrs/layout
 # [1] ramulator_init ... [ramulator_sv_wrapper] Loaded 524288 beats from binary 'configs/sdma_meminit.bin' at base 0x00000000
 # [ramulator_sv_wrapper] Init OK (config=./configs/ddr4_config.yaml)
 # OK
 # [2] (meminit active) Skipping AXI writes - pre-loading shadow[] ...
 #     shadow pre-loaded: 524288 entries (ROW_BASE + TILE_BASE)
-# [3] Row-major load: 32768 SDMAs x 8 beats = 262144 transactions ...
+# [3] Row-major load: 1024 SDMAs x 256 beats = 262144 transactions ...
 #     Queue: 262144 entries  stride within instr = 8 B
-#     Row-major:  OK=262144/262144  FAIL=0  cycles=4338553  avg=16/trans
-# [4] Tile-major load: 32768 SDMAs x 8 beats = 262144 transactions ...
-#     Queue: 262144 entries  stride within instr = 2048 B (= 1 row)
-#     Tile-major: OK=262144/262144  FAIL=0  cycles=2956689  avg=11/trans
+#     Row-major:  OK=262144/262144  FAIL=0  cycles=5248317  avg=20/trans
+# [4] Tile-major load: 1024 SDMAs x 256 beats = 262144 transactions ...
+#     Queue: 262144 entries  stride within tile-row = 8 B  tile-row stride = 2048 B
+#     Tile-major: OK=262144/262144  FAIL=0  cycles=2387042  avg=9/trans
 # 
 # --- SDMA Load Timing Report ---
 #   Config         : ./configs/ddr4_config.yaml
 #   Matrix         : 1024x1024 int16 = 2048 KB
 #   Tile           : 32x32  |  32x32 tile grid  |  1024 tiles
-#   SDMA instr     : 8 beats x 8 B = 64 B/instr  |  32768 instrs/layout
-#   Clock          : 100 MHz  (1 cycle = 10 ns)
+#   SDMA instr     : 256 beats x 8 B = 2048 B/instr  |  1024 instrs/layout
+#   Clock          : 800 MHz  (1 cycle = 1.25 ns)
 #   [2] Writes     : SKIPPED (meminit preload)
 # 
 #   Pattern               Cycles     Time (us)  Cyc/SDMA instr    Cyc/beat       B/cycle
 #   --------------  ------------  ------------  --------------  ----------  ------------
-#   Row-major            4338553      43385.53             132          16         0.48
-#   Tile-major           2956689      29566.89              90          11         0.70
+#   Row-major            5248317       6560.39            5125          20         0.39
+#   Tile-major           2387042       2983.80            2331           9         0.87
 # 
 #   Correctness    : row OK=262144/262144 FAIL=0  |  tile OK=262144/262144 FAIL=0
 # 

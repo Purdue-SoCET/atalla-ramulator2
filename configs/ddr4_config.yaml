@@ -4,7 +4,7 @@ Frontend:
 
 MemorySystem:
   impl: GenericDRAM
-  clock_ratio: 1
+  clock_ratio: 2
 
   DRAM:
     impl: DDR4
