@@ -13,7 +13,7 @@ MemorySystem:
       channel: 1
       rank: 2
     timing:
-      preset: DDR4_1600K
+      preset: DDR4_3200W
 
   Controller:
     impl: Generic
