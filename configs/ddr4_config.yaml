@@ -9,11 +9,11 @@ MemorySystem:
   DRAM:
     impl: DDR4
     org:
-      preset: DDR4_8Gb_x8
+      preset: DDR4_8Gb_x16
       channel: 1
       rank: 2
     timing:
-      preset: DDR4_2400R
+      preset: DDR4_1600K
 
   Controller:
     impl: Generic

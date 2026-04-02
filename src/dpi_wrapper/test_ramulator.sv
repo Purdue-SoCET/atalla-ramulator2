@@ -61,7 +61,7 @@ module test_ramulator #(
     // ----------------------------------------------------------------
     logic clk  = 0;
     logic nrst = 0;
-    always #5 clk = ~clk;  // 100 MHz
+    always #0.625 clk = ~clk;  // 800 MHz
 
     // ----------------------------------------------------------------
     // AXI bus interface + DUT

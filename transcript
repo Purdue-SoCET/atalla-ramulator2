@@ -1,5 +1,5 @@
 # vsim -c -voptargs="+acc" -sv_lib ./libramulator_dpi work.test_sdma -do "run -all" -GMEMINIT_TYPE=bin -GMEM_INIT_BASE=0 -GCFG=./configs/ddr4_config.yaml -GMEMINIT_BASE=0 -GMEM_INIT_FILE=configs/sdma_meminit.bin -GMEMINIT_FILE=configs/sdma_meminit.bin -GUSE_MEMINIT=1 -GMEM_INIT_TYPE=bin 
-# Start time: 01:30:21 on Apr 01,2026
+# Start time: 01:25:49 on Apr 02,2026
 # ** Note: (vsim-3812) Design is being optimized...
 # //  Questa Sim-64
 # //  Version 2021.4 linux_x86_64 Oct 13 2021
